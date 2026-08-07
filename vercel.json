@@ -1,0 +1,12 @@
+# Vercel 部署配置
+[build]
+  command = "npm run build"
+  output = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# SPA 路由支持：所有路径回退到 index.html
+[[routes]]
+  pattern = "/*"
+  fallback = "index.html"

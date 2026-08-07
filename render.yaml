@@ -1,0 +1,25 @@
+services:
+  # ─── 后端 API ───
+  - type: web
+    name: ai-language-platform-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:$PORT
+    healthCheckPath: /docs
+    envVars:
+      - key: LLM_API_KEY
+        sync: false  # 在 Render 面板手动填写
+      - key: LLM_BASE_URL
+        value: https://api.deepseek.com/v1
+      - key: LLM_MODEL
+        value: deepseek-chat
+      - key: AZURE_SPEECH_KEY
+        sync: false
+      - key: AZURE_SPEECH_REGION
+        value: eastasia
+      - key: CORS_ORIGINS
+        value: "*"
+      - key: PYTHON_VERSION
+        value: 3.11.9
