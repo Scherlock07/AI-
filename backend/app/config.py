@@ -1,7 +1,12 @@
 """应用配置 — 支持环境变量和 .env 文件"""
 
+import os
 from pydantic_settings import BaseSettings
 from typing import Optional
+
+
+# 检测是否运行在 Vercel 上
+IS_VERCEL = os.environ.get("VERCEL") == "1"
 
 
 class Settings(BaseSettings):
@@ -10,8 +15,12 @@ class Settings(BaseSettings):
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = True
 
-    # 数据库 (开发环境用 SQLite，生产切 PostgreSQL)
-    DATABASE_URL: str = "sqlite:///./ai_language_platform.db"
+    # 数据库 (开发环境用 SQLite，Vercel 用 /tmp，生产切 PostgreSQL)
+    DATABASE_URL: str = (
+        f"sqlite:////tmp/ai_language_platform.db"
+        if IS_VERCEL
+        else "sqlite:///./ai_language_platform.db"
+    )
 
     # JWT
     SECRET_KEY: str = "dev-secret-key-change-in-production-9f8a2b7c"
@@ -34,8 +43,8 @@ class Settings(BaseSettings):
     TESSERACT_CMD: str = ""  # 留空则用系统默认路径
     OCR_LANGUAGE: str = "eng"
 
-    # 文件上传
-    UPLOAD_DIR: str = "./uploads"
+    # 文件上传 (Vercel 只能写 /tmp)
+    UPLOAD_DIR: str = "/tmp/uploads" if IS_VERCEL else "./uploads"
     MAX_UPLOAD_SIZE: int = 20 * 1024 * 1024  # 20MB
 
     class Config:
