@@ -7,8 +7,12 @@ from app.database import get_db
 from app.models.user import User
 from app.models.reading import ReadingText, ReadingExercise
 from app.auth.security import get_current_user
-from app.schemas.reading import ReadingImportRequest, ReadingAnalysisRequest, ReadingAnalysisResult, ReadingTextResponse
-from app.services.llm_service import analyze_reading
+from app.schemas.reading import (
+    ReadingImportRequest, ReadingAnalysisRequest, ReadingAnalysisResult, ReadingTextResponse,
+    WordAnalysisRequest, WordAnalysisResult,
+    SentenceAnalysisRequest, SentenceAnalysisResult,
+)
+from app.services.llm_service import analyze_reading, analyze_single_word, analyze_single_sentence
 
 router = APIRouter(prefix="/api/reading", tags=["阅读模块"])
 
@@ -41,6 +45,20 @@ async def analyze(req: ReadingAnalysisRequest, db: Session = Depends(get_db), us
     """AI 阅读分析（实时分析，不保存）"""
     result = await analyze_reading(req.content, req.difficulty)
     return ReadingAnalysisResult(**result)
+
+
+@router.post("/analyze-word", response_model=WordAnalysisResult)
+async def analyze_word(req: WordAnalysisRequest, user: User = Depends(get_current_user)):
+    """AI 分析单个单词（在阅读上下文中）"""
+    result = await analyze_single_word(req.word, req.context)
+    return WordAnalysisResult(**result)
+
+
+@router.post("/analyze-sentence", response_model=SentenceAnalysisResult)
+async def analyze_sentence(req: SentenceAnalysisRequest, user: User = Depends(get_current_user)):
+    """AI 分析单个句子（长难句分析）"""
+    result = await analyze_single_sentence(req.sentence, req.difficulty)
+    return SentenceAnalysisResult(**result)
 
 
 @router.post("/{text_id}/analyze", response_model=ReadingTextResponse)

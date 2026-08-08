@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { speakingApi } from '@/api/client'
+import { speakingApi, profileApi } from '@/api/client'
 import { useToast } from '@/contexts/ToastContext'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
@@ -9,7 +9,7 @@ import { Skeleton, ErrorState, EmptyState, LoadingSpinner } from '@/components/u
 import { cn, formatDuration, getScoreColor } from '@/lib/utils'
 import {
   Mic, Play, Pause, Square, Users, Bot,
-  Presentation, MessagesSquare, Repeat, GraduationCap,
+  Presentation, MessagesSquare, Repeat, GraduationCap, BookOpen,
   Sparkles, Clock, Volume2, CheckCircle2,
   AlertCircle, Wifi, Send, Plus, Search, ArrowLeft,
   UserPlus, LogOut, Hash, Globe, Zap, Lightbulb, X,
@@ -242,6 +242,22 @@ function ClassroomView() {
   )
 }
 
+// ===== Presentation 题库 =====
+const PRESENTATION_TOPICS = [
+  { title: 'Describe a technological innovation that has significantly changed your life. Explain how it has affected you and why you think it is important.', category: '科技', difficulty: '中级' },
+  { title: 'Describe a person who has had a major influence on your life. Explain why this person is important to you and how they have shaped who you are.', category: '人物', difficulty: '中级' },
+  { title: 'Describe a memorable travel experience. Where did you go, what did you do, and why was it memorable?', category: '经历', difficulty: '初级' },
+  { title: 'Discuss the impact of social media on modern communication. Has it brought people closer together or pushed them apart?', category: '社会', difficulty: '高级' },
+  { title: 'Describe a book or movie that profoundly affected you. What was it about, and why did it leave such an impression?', category: '文化', difficulty: '中级' },
+  { title: 'Present your opinion on whether university education should be practical or theoretical. Support your view with examples.', category: '教育', difficulty: '高级' },
+  { title: 'Describe a challenge you have overcome. What was the challenge, how did you deal with it, and what did you learn?', category: '经历', difficulty: '中级' },
+  { title: 'Discuss the role of artificial intelligence in the future workplace. What opportunities and challenges does it present?', category: '科技', difficulty: '高级' },
+  { title: 'Describe a cultural tradition from your country that you think is important to preserve. Why is it meaningful?', category: '文化', difficulty: '中级' },
+  { title: 'Present your views on work-life balance. Is it achievable in today\'s fast-paced world?', category: '社会', difficulty: '高级' },
+  { title: 'Describe an environmental issue that concerns you. What are the causes and what can individuals do to help?', category: '环境', difficulty: '中级' },
+  { title: 'Discuss whether students should be required to learn a second language. What are the benefits and drawbacks?', category: '教育', difficulty: '中级' },
+]
+
 // ===== Presentation View =====
 function PresentationView() {
   const [phase, setPhase] = useState<'topic' | 'prepare' | 'record' | 'result' | 'loading'>('topic')
@@ -249,8 +265,11 @@ function PresentationView() {
   const [countdown, setCountdown] = useState(60)
   const [result, setResult] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
+  const [selectedTopic, setSelectedTopic] = useState(PRESENTATION_TOPICS[0].title)
+  const [showBank, setShowBank] = useState(false)
+  const [filterCategory, setFilterCategory] = useState('')
 
-  const todayTopic = 'Describe a technological innovation that has significantly changed your life. Explain how it has affected you and why you think it is important.'
+  const categories = ['全部', '科技', '人物', '经历', '社会', '文化', '教育', '环境']
 
   useEffect(() => {
     if (phase === 'prepare' && countdown > 0) {
@@ -267,8 +286,8 @@ function PresentationView() {
     try {
       const res = await speakingApi.evaluate({
         type: 'presentation',
-        topic: todayTopic,
-        transcript: 'This is a sample transcript of the presentation about technological innovation and its impact on daily life.',
+        topic: selectedTopic,
+        transcript: 'This is a sample transcript of the presentation. The speaker discusses the topic with supporting examples and personal reflections.',
       })
       setResult(res)
       setPhase('result')
@@ -278,39 +297,123 @@ function PresentationView() {
     }
   }
 
+  const filteredTopics = filterCategory === '全部' || !filterCategory
+    ? PRESENTATION_TOPICS
+    : PRESENTATION_TOPICS.filter(t => t.category === filterCategory)
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <div className="space-y-4">
         {phase === 'topic' && (
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Presentation className="w-5 h-5 text-purple-500" />
-                <CardTitle>今日 Presentation 话题</CardTitle>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="p-4 bg-purple-50 rounded-xl mb-4">
-                <p className="text-gray-800 font-medium">{todayTopic}</p>
-              </div>
-              <div className="mb-4">
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-sm font-medium text-gray-700">准备时间</label>
-                  <span className="text-sm text-indigo-600 font-medium">{prepTime} 秒</span>
+          <>
+            <Card>
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <Presentation className="w-5 h-5 text-purple-500" />
+                  <CardTitle>今日 Presentation 话题</CardTitle>
                 </div>
-                <input
-                  type="range" min="30" max="180" step="30"
-                  value={prepTime}
-                  onChange={(e) => setPrepTime(parseInt(e.target.value))}
-                  className="w-full accent-indigo-500"
-                />
-              </div>
-              <Button size="lg" className="w-full" onClick={() => { setCountdown(prepTime); setPhase('prepare') }}>
-                <Clock className="w-4 h-4" />
-                开始准备 ({prepTime}s)
-              </Button>
-            </CardContent>
-          </Card>
+              </CardHeader>
+              <CardContent>
+                <div className="p-4 bg-purple-50 rounded-xl mb-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Badge variant="primary">{PRESENTATION_TOPICS[0].category}</Badge>
+                    <Badge variant={PRESENTATION_TOPICS[0].difficulty === '高级' ? 'danger' : PRESENTATION_TOPICS[0].difficulty === '中级' ? 'warning' : 'success'}>
+                      {PRESENTATION_TOPICS[0].difficulty}
+                    </Badge>
+                  </div>
+                  <p className="text-gray-800 font-medium">{PRESENTATION_TOPICS[0].title}</p>
+                </div>
+                <div className="mb-4">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-sm font-medium text-gray-700">准备时间</label>
+                    <span className="text-sm text-indigo-600 font-medium">{prepTime} 秒</span>
+                  </div>
+                  <input
+                    type="range" min="30" max="180" step="30"
+                    value={prepTime}
+                    onChange={(e) => setPrepTime(parseInt(e.target.value))}
+                    className="w-full accent-indigo-500"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button size="lg" className="flex-1" onClick={() => { setSelectedTopic(PRESENTATION_TOPICS[0].title); setCountdown(prepTime); setPhase('prepare') }}>
+                    <Clock className="w-4 h-4" />
+                    开始准备 ({prepTime}s)
+                  </Button>
+                  <Button size="lg" variant="outline" onClick={() => setShowBank(!showBank)}>
+                    <BookOpen className="w-4 h-4" />
+                    题库
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            {showBank && (
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <BookOpen className="w-5 h-5 text-indigo-500" />
+                      <CardTitle>Presentation 题库</CardTitle>
+                    </div>
+                    <Badge variant="default">{filteredTopics.length} 题</Badge>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {/* 分类筛选 */}
+                  <div className="flex gap-1.5 flex-wrap mb-4">
+                    {categories.map(c => (
+                      <button
+                        key={c}
+                        onClick={() => setFilterCategory(c)}
+                        className={cn(
+                          'px-2.5 py-1 text-xs font-medium rounded-full transition-all',
+                          (filterCategory === c || (!filterCategory && c === '全部'))
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        )}
+                      >
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                  {/* 话题列表 */}
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {filteredTopics.map((topic, i) => (
+                      <div
+                        key={i}
+                        onClick={() => {
+                          setSelectedTopic(topic.title)
+                          setShowBank(false)
+                        }}
+                        className={cn(
+                          'p-3 rounded-lg cursor-pointer transition-all border',
+                          selectedTopic === topic.title
+                            ? 'border-indigo-400 bg-indigo-50 ring-2 ring-indigo-100'
+                            : 'border-gray-100 hover:border-indigo-300 hover:bg-gray-50'
+                        )}
+                      >
+                        <div className="flex items-center gap-2 mb-1">
+                          <Badge variant="default">{topic.category}</Badge>
+                          <Badge variant={topic.difficulty === '高级' ? 'danger' : topic.difficulty === '中级' ? 'warning' : 'success'}>
+                            {topic.difficulty}
+                          </Badge>
+                        </div>
+                        <p className="text-sm text-gray-700">{topic.title}</p>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </>
+        )}
+
+        {phase !== 'topic' && selectedTopic !== PRESENTATION_TOPICS[0].title && (
+          <div className="p-3 bg-purple-50 rounded-lg">
+            <p className="text-xs text-purple-400 mb-1">当前话题</p>
+            <p className="text-sm text-gray-700">{selectedTopic}</p>
+          </div>
         )}
 
         {phase === 'prepare' && (
@@ -323,7 +426,7 @@ function PresentationView() {
                   <Progress value={(1 - countdown / prepTime) * 100} color="primary" />
                 </div>
                 <div className="mt-6 p-3 bg-gray-50 rounded-lg w-full">
-                  <p className="text-sm text-gray-500 text-center">{todayTopic}</p>
+                  <p className="text-sm text-gray-500 text-center">{selectedTopic}</p>
                 </div>
               </div>
             </CardContent>
@@ -331,7 +434,7 @@ function PresentationView() {
         )}
 
         {phase === 'record' && (
-          <RecordingPanel title="Presentation 录音" topic={todayTopic} onResult={handleEvaluate} />
+          <RecordingPanel title="Presentation 录音" topic={selectedTopic} onResult={handleEvaluate} />
         )}
 
         {phase === 'loading' && (
@@ -368,7 +471,8 @@ function PresentationView() {
               <Presentation className="w-8 h-8 text-purple-400" />
             </div>
             <p className="text-gray-400 text-sm">
-              AI将根据考试热门主题和时事热点<br />生成每日 Presentation 话题<br />完成后提供多维度评分和参考示例
+              选择话题后开始练习<br />AI将提供多维度评分和参考示例<br />
+              <span className="text-xs text-gray-300">点击"题库"浏览更多话题</span>
             </p>
           </div>
         </Card>
@@ -1428,36 +1532,75 @@ function ConversationView() {
   const [input, setInput] = useState('')
   const [evaluating, setEvaluating] = useState(false)
   const [result, setResult] = useState<any>(null)
+  const [aiReplying, setAiReplying] = useState(false)
+  const [customTopic, setCustomTopic] = useState('')
 
-  const startConversation = () => {
+  const suggestedTopics = mode === 'daily'
+    ? ['环境保护', '科技发展', '教育改革', '社会公平', '旅行经历', '健康生活']
+    : ['AI伦理', '全球化利弊', '隐私vs安全', '传统文化保护', '财富分配', '气候政策']
+
+  const startConversation = (topic: string) => {
     setActive(true)
-    setMessages([{
-      role: 'ai',
-      text: mode === 'daily' ? "Hi there! How was your day? Did anything interesting happen?" : "What's your stance on the ethical implications of artificial intelligence in decision-making processes?",
-      time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
-    }])
+    setResult(null)
+    setMessages([])
+    const modeLabel = mode === 'daily' ? 'casual daily conversation' : 'critical thinking discussion'
+    const systemText = topic
+      ? `Let's have a ${modeLabel} about: ${topic}. I'll start by asking you a question related to this topic.`
+      : (mode === 'daily'
+        ? "Hi there! How was your day? Did anything interesting happen?"
+        : "What's your stance on the ethical implications of artificial intelligence in decision-making processes?")
+
+    // 让AI发起对话
+    setAiReplying(true)
+    profileApi.askAssistant(
+      `You are an English conversation partner on a language learning platform. The student wants to practice ${modeLabel}${topic ? ` about "${topic}"` : ''}. Please start the conversation with a natural opening question or comment in English. Keep it short (1-2 sentences).`,
+      'conversation-start'
+    ).then((res: any) => {
+      setMessages([{
+        role: 'ai',
+        text: res.reply || systemText,
+        time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      }])
+    }).catch(() => {
+      setMessages([{
+        role: 'ai',
+        text: systemText,
+        time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      }])
+    }).finally(() => {
+      setAiReplying(false)
+    })
   }
 
   const sendMessage = async () => {
-    if (!input.trim()) return
+    if (!input.trim() || aiReplying) return
     const userMsg = { role: 'user', text: input, time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }) }
+    const currentInput = input
     setMessages(prev => [...prev, userMsg])
     setInput('')
+    setAiReplying(true)
 
-    // Simulate AI response
-    setTimeout(() => {
-      const aiResponses = [
-        "That's an interesting perspective. Can you elaborate on that?",
-        "I see your point. How do you think that applies to broader social contexts?",
-        "That's a thoughtful observation. What led you to that conclusion?",
-        "I understand. Have you considered the alternative viewpoint?",
-      ]
+    try {
+      // 构建对话上下文
+      const conversationContext = messages.map(m => `${m.role === 'ai' ? 'AI' : 'Student'}: ${m.text}`).join('\n')
+      const modeLabel = mode === 'daily' ? 'casual daily conversation' : 'critical thinking discussion'
+      const prompt = `You are an English conversation partner. Continue this ${modeLabel} naturally. The student just said: "${currentInput}". Previous context:\n${conversationContext}\n\nRespond naturally in English (2-3 sentences). Ask follow-up questions to keep the conversation going. Match the difficulty level of the student's English.`
+
+      const res = await profileApi.askAssistant(prompt, 'conversation-continue')
       setMessages(prev => [...prev, {
         role: 'ai',
-        text: aiResponses[Math.floor(Math.random() * aiResponses.length)],
+        text: res.reply || "That's interesting. Can you tell me more about that?",
         time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
       }])
-    }, 1000)
+    } catch {
+      setMessages(prev => [...prev, {
+        role: 'ai',
+        text: "I see. Could you elaborate on that a bit more?",
+        time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      }])
+    } finally {
+      setAiReplying(false)
+    }
   }
 
   const finishConversation = async () => {
@@ -1470,8 +1613,7 @@ function ConversationView() {
         transcript: messages.map(m => `${m.role}: ${m.text}`).join('\n'),
       })
       setResult(res)
-    } catch (err: any) {
-      // Fallback: still show some result
+    } catch {
       setResult({
         scores: [{ name: '整体表现', score: 78 }],
         feedback: '对话完成。继续练习以提升口语流利度和表达准确性。',
@@ -1512,29 +1654,45 @@ function ConversationView() {
               </div>
             </div>
 
-            <div className="mb-4">
-              <label className="text-sm font-medium text-gray-700 mb-1.5 block">对话主题</label>
-              <div className="flex flex-wrap gap-2">
-                {['环境保护', '科技发展', '教育改革', '社会公平', 'AI推荐'].map(t => (
-                  <button key={t} onClick={() => toast(`已选择话题：${t}`, 'info')} className="px-2.5 py-1 text-xs bg-gray-50 text-gray-500 rounded-full hover:bg-indigo-50 hover:text-indigo-600 transition-colors">
-                    {t}
-                  </button>
-                ))}
-              </div>
-            </div>
-
             {!active && !evaluating && !result && (
-              <Button size="lg" className="w-full" onClick={startConversation}>
-                <Mic className="w-4 h-4" />
-                开始对话
-              </Button>
+              <>
+                <div className="mb-4">
+                  <label className="text-sm font-medium text-gray-700 mb-1.5 block">对话主题</label>
+                  <input
+                    value={customTopic}
+                    onChange={(e) => setCustomTopic(e.target.value)}
+                    placeholder="输入你想聊的话题，如：My favorite movie, Climate change solutions..."
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400"
+                  />
+                </div>
+
+                <div className="mb-4">
+                  <p className="text-xs text-gray-400 mb-2">推荐话题（点击直接开始）</p>
+                  <div className="flex flex-wrap gap-2">
+                    {suggestedTopics.map(t => (
+                      <button
+                        key={t}
+                        onClick={() => { setCustomTopic(t); startConversation(t) }}
+                        className="px-2.5 py-1 text-xs bg-gray-50 text-gray-500 rounded-full hover:bg-indigo-50 hover:text-indigo-600 transition-colors"
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <Button size="lg" className="w-full" onClick={() => startConversation(customTopic)}>
+                  <Mic className="w-4 h-4" />
+                  {customTopic ? `开始对话：${customTopic}` : '开始自由对话'}
+                </Button>
+              </>
             )}
 
             {active && (
               <div className="space-y-3">
                 <div className="p-3 bg-indigo-50 rounded-lg flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse"></div>
-                  <span className="text-sm text-indigo-600">AI正在聆听...</span>
+                  <div className={cn('w-3 h-3 rounded-full', aiReplying ? 'bg-amber-500 animate-pulse' : 'bg-green-500 animate-pulse')}></div>
+                  <span className="text-sm text-indigo-600">{aiReplying ? 'AI正在思考...' : 'AI正在聆听...'}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <input
@@ -1542,13 +1700,14 @@ function ConversationView() {
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
                     placeholder="输入你的回答..."
-                    className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400"
+                    disabled={aiReplying}
+                    className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400 disabled:bg-gray-50"
                   />
-                  <Button size="sm" onClick={sendMessage}>
-                    <Send className="w-4 h-4" />
+                  <Button size="sm" onClick={sendMessage} disabled={!input.trim() || aiReplying}>
+                    {aiReplying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                   </Button>
                 </div>
-                <Button variant="outline" size="lg" className="w-full" onClick={finishConversation}>
+                <Button variant="outline" size="lg" className="w-full" onClick={finishConversation} disabled={aiReplying}>
                   <Square className="w-4 h-4" />
                   结束对话并评分
                 </Button>
@@ -1561,6 +1720,12 @@ function ConversationView() {
                 <p className="mt-3 text-sm text-gray-500">AI 正在评估对话表现...</p>
               </div>
             )}
+
+            {result && !active && !evaluating && (
+              <Button variant="outline" className="w-full" onClick={() => { setResult(null); setMessages([]); setCustomTopic(''); }}>
+                开始新对话
+              </Button>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -1570,6 +1735,7 @@ function ConversationView() {
           <Card>
             <CardHeader>
               <CardTitle>对话记录</CardTitle>
+              {customTopic && <Badge variant="primary" className="ml-2">{customTopic}</Badge>}
             </CardHeader>
             <CardContent>
               <div className="space-y-3 max-h-80 overflow-y-auto">
@@ -1579,11 +1745,11 @@ function ConversationView() {
                       'w-8 h-8 rounded-full flex items-center justify-center shrink-0',
                       msg.role === 'ai' ? 'bg-purple-100' : 'bg-indigo-100'
                     )}>
-                      {msg.role === 'ai' ? <Bot className="w-4 h-4 text-purple-600" /> : '我'}
+                      {msg.role === 'ai' ? <Bot className="w-4 h-4 text-purple-600" /> : <span className="text-xs font-medium text-indigo-600">我</span>}
                     </div>
                     <div className={cn('max-w-[75%]')}>
                       <div className={cn(
-                        'p-2.5 rounded-lg text-sm',
+                        'p-2.5 rounded-lg text-sm leading-relaxed',
                         msg.role === 'user' ? 'bg-indigo-500 text-white' : 'bg-gray-50 text-gray-700'
                       )}>
                         {msg.text}
@@ -1592,6 +1758,16 @@ function ConversationView() {
                     </div>
                   </div>
                 ))}
+                {aiReplying && (
+                  <div className="flex gap-2">
+                    <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center shrink-0">
+                      <Bot className="w-4 h-4 text-purple-600" />
+                    </div>
+                    <div className="bg-gray-50 rounded-lg px-3 py-2.5">
+                      <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
+                    </div>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -1607,8 +1783,8 @@ function ConversationView() {
                 <MessagesSquare className="w-8 h-8 text-purple-400" />
               </div>
               <p className="text-gray-400 text-sm">
-                AI将作为你的对话伙伴模拟真实场景<br />
-                支持文字或语音对话，结束后给出评分和建议<br />
+                输入你感兴趣的话题，AI将作为你的对话伙伴<br />
+                支持文字对话，结束后给出评分和建议<br />
                 <span className="text-xs">日常对话练习生活场景，思辨对话锻炼论证能力</span>
               </p>
             </div>

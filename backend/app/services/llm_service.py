@@ -173,6 +173,87 @@ async def evaluate_speaking(transcript: str, topic: str, speaking_type: str, ref
     ])
 
 
+# ========== 单词分析（阅读上下文） ==========
+
+async def analyze_single_word(word: str, context: str = "") -> dict:
+    """AI 分析单个单词（释义、用法、搭配、例句）"""
+    if not settings.LLM_API_KEY:
+        return _mock_single_word(word)
+    system_msg = "你是一位英语词汇教学专家，擅长在阅读上下文中分析单词的含义和用法。"
+
+    user_msg = f"""请分析单词 "{word}"。
+
+{"该单词出现在以下上下文中：" + context[:500] if context else ""}
+
+请严格按 JSON 格式输出：
+{{
+  "word": "{word}",
+  "phonetic": "/fəˈnetɪk/",
+  "partOfSpeech": "n./v./adj./adv. 等",
+  "definition": "中文释义",
+  "definition_en": "English definition",
+  "synonyms": ["同义词1", "同义词2"],
+  "antonyms": ["反义词1"],
+  "collocations": ["常见搭配1", "常见搭配2"],
+  "examples": ["英文例句1", "英文例句2"],
+  "etymology": "词源简要说明（如有）",
+  "difficulty": "CEFR级别 A1-C2",
+  "note": "在当前上下文中的特殊含义或用法说明（如有）"
+}}"""
+
+    return await call_llm_json([
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": user_msg},
+    ])
+
+
+# ========== 句子分析（长难句） ==========
+
+async def analyze_single_sentence(sentence: str, difficulty: str = "intermediate") -> dict:
+    """AI 分析单个句子（语法结构、翻译、重点词汇）"""
+    if not settings.LLM_API_KEY:
+        return _mock_single_sentence(sentence)
+    system_msg = "你是一位英语语法和阅读教学专家，擅长分析长难句的句法结构并提供翻译。"
+
+    user_msg = f"""请分析以下英语句子（难度: {difficulty}）：
+
+{sentence}
+
+请严格按 JSON 格式输出：
+{{
+  "sentence": "{sentence}",
+  "translation": "中文翻译",
+  "structure": "句子结构分析（主谓宾、从句类型等）",
+  "clauses": [
+    {{
+      "type": "主句/定语从句/状语从句/名词性从句",
+      "text": "从句原文",
+      "function": "在句中的功能说明"
+    }}
+  ],
+  "key_phrases": [
+    {{
+      "phrase": "重点短语",
+      "meaning": "含义"
+    }}
+  ],
+  "grammar_points": ["语法点1", "语法点2"],
+  "vocabulary": [
+    {{
+      "word": "生词",
+      "phonetic": "/fəˈnetɪk/",
+      "definition": "释义"
+    }}
+  ],
+  "tip": "学习建议或注意事项"
+}}"""
+
+    return await call_llm_json([
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": user_msg},
+    ])
+
+
 # ========== 阅读分析 ==========
 
 async def analyze_reading(content: str, difficulty: str = "intermediate") -> dict:
@@ -575,6 +656,36 @@ def _mock_speaking_eval(topic: str) -> dict:
         "overall_score": 73,
         "feedback": "口语表达整体不错，话题把握较好。建议在流利度和语法准确性上多加练习，减少不必要的停顿。",
         "reference_answer": f"[关于「{topic}」的参考示范回答将在配置LLM API Key后提供]",
+    }
+
+
+def _mock_single_word(word: str) -> dict:
+    return {
+        "word": word,
+        "phonetic": "/mɒk/",
+        "partOfSpeech": "n./v./adj.",
+        "definition": f"[{word}的中文释义将在配置LLM API Key后提供]",
+        "definition_en": f"[English definition for '{word}' will be available after configuring LLM API Key]",
+        "synonyms": ["synonym1", "synonym2"],
+        "antonyms": ["antonym1"],
+        "collocations": ["collocation1", "collocation2"],
+        "examples": [f"This is an example sentence using {word}.", f"Another example with {word} in context."],
+        "etymology": "",
+        "difficulty": "B2",
+        "note": "",
+    }
+
+
+def _mock_single_sentence(sentence: str) -> dict:
+    return {
+        "sentence": sentence,
+        "translation": "[句子翻译将在配置LLM API Key后提供]",
+        "structure": "[句子结构分析将在配置LLM API Key后提供]",
+        "clauses": [],
+        "key_phrases": [],
+        "grammar_points": [],
+        "vocabulary": [],
+        "tip": "配置LLM API Key后可获得完整的句子分析。",
     }
 
 

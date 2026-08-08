@@ -183,6 +183,14 @@ export const readingApi = {
     request(`/api/reading/${textId}/analyze`, { method: 'POST' }),
 
   getText: (id: string) => request(`/api/reading/${id}`),
+
+  // 单词分析（阅读上下文）
+  analyzeWord: (word: string, context: string = '') =>
+    request('/api/reading/analyze-word', { method: 'POST', body: JSON.stringify({ word, context }) }),
+
+  // 句子分析（长难句）
+  analyzeSentence: (sentence: string, difficulty: string = 'intermediate') =>
+    request('/api/reading/analyze-sentence', { method: 'POST', body: JSON.stringify({ sentence, difficulty }) }),
 }
 
 // ========== 写作模块 API ==========
