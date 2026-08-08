@@ -88,8 +88,8 @@ export function TeacherDashboard() {
 
   if (loading) {
     return (
-      <div className="p-6 max-w-7xl mx-auto">
-        <div className="grid grid-cols-5 gap-4 mb-6">
+      <div className="p-4 sm:p-6 max-w-7xl mx-auto">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4 mb-6">
           {[1, 2, 3, 4, 5].map(i => <Skeleton key={i} className="h-24 rounded-2xl" />)}
         </div>
         <Skeleton className="h-96 rounded-2xl" />
@@ -99,7 +99,7 @@ export function TeacherDashboard() {
 
   if (error && classes.length === 0) {
     return (
-      <div className="p-6 max-w-7xl mx-auto">
+      <div className="p-4 sm:p-6 max-w-7xl mx-auto">
         <ErrorState message={error} onRetry={fetchClasses} />
       </div>
     )
@@ -132,7 +132,7 @@ export function TeacherDashboard() {
   ]
 
   return (
-    <div className="p-6 max-w-7xl mx-auto animate-fadeIn">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto animate-fadeIn">
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 mb-1">教师后台</h1>
@@ -178,7 +178,7 @@ export function TeacherDashboard() {
       )}
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-5 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4 mb-6">
         {[
           { label: '班级人数', value: totalStudents, icon: Users, color: 'text-indigo-600 bg-indigo-50' },
           { label: '今日活跃', value: activeToday, icon: TrendingUp, color: 'text-green-600 bg-green-50' },
@@ -210,7 +210,7 @@ export function TeacherDashboard() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Left: Student List */}
           <div className="col-span-2 space-y-6">
             <Card>

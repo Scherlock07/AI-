@@ -82,9 +82,9 @@ export function LearningProfile() {
 
   if (loading) {
     return (
-      <div className="p-6 max-w-7xl mx-auto">
+      <div className="p-4 sm:p-6 max-w-7xl mx-auto">
         <Skeleton className="h-32 w-full rounded-2xl mb-6" />
-        <div className="grid grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
           <Skeleton className="h-80 rounded-2xl" />
           <Skeleton className="h-80 rounded-2xl" />
           <Skeleton className="h-80 rounded-2xl" />
@@ -95,7 +95,7 @@ export function LearningProfile() {
 
   if (error && !stats) {
     return (
-      <div className="p-6 max-w-7xl mx-auto">
+      <div className="p-4 sm:p-6 max-w-7xl mx-auto">
         <ErrorState message={error} onRetry={fetchAll} />
       </div>
     )
@@ -138,7 +138,7 @@ export function LearningProfile() {
   ]
 
   return (
-    <div className="p-6 max-w-7xl mx-auto animate-fadeIn">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto animate-fadeIn">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900 mb-1">学习档案</h1>
         <p className="text-sm text-gray-400">学习者画像 · 学习路径 · 数据分析 · AI助教</p>
@@ -182,7 +182,7 @@ export function LearningProfile() {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
         {/* Left: Ability & Trends */}
         <div className="col-span-2 space-y-6">
           {/* Ability Radar */}
@@ -239,7 +239,7 @@ export function LearningProfile() {
               <CardTitle>各模块练习统计</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {moduleStats.map((m) => {
                   const Icon = m.icon
                   return (

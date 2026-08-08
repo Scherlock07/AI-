@@ -27,13 +27,13 @@ export function VocabularyModule() {
   }, [])
 
   return (
-    <div className="p-6 max-w-7xl mx-auto animate-fadeIn">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto animate-fadeIn">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900 mb-1">词汇与语法</h1>
         <p className="text-sm text-gray-400">智能词汇本 · 艾宾浩斯复习 · 语法练习 · 词根词缀分析</p>
       </div>
 
-      <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-xl w-fit">
+      <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-xl w-fit overflow-x-auto max-w-full">
         {[
           { key: 'vocabulary' as TabType, label: '词汇本', icon: BookMarked },
           { key: 'grammar' as TabType, label: '语法练习', icon: Brain },
@@ -99,7 +99,7 @@ function VocabularyView() {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
         <Card className="p-4">
           <div className="text-2xl font-bold text-gray-900">{items.length}</div>
           <div className="text-xs text-gray-400">总词汇量</div>
@@ -223,8 +223,8 @@ function GrammarView() {
   }
 
   return (
-    <div className="grid grid-cols-3 gap-6">
-      <div className="col-span-2">
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="lg:col-span-2">
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -466,7 +466,7 @@ function RootsView() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {group.words.map((w) => (
                 <div key={w} className="p-3 border border-gray-100 rounded-xl hover:border-indigo-200 transition-colors cursor-pointer" onClick={() => { setWord(w); handleAnalyze(w) }}>
                   <span className="font-bold text-gray-900">{w}</span>
@@ -523,7 +523,7 @@ function WrongBookView() {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-3 gap-3 sm:gap-4">
         <Card className="p-4 bg-red-50 border-red-100">
           <div className="text-2xl font-bold text-red-600">{answers.filter(w => !w.reviewed).length}</div>
           <div className="text-xs text-gray-400">待复习</div>
@@ -553,7 +553,7 @@ function WrongBookView() {
             </div>
             <p className="text-sm font-medium text-gray-800 mb-2">{wa.question}</p>
             {wa.user_answer && wa.correct_answer && (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="p-2 bg-red-50 rounded-lg">
                   <div className="text-xs text-gray-400 mb-0.5">你的答案</div>
                   <div className="text-sm text-red-600">{wa.user_answer}</div>

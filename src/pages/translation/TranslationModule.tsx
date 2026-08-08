@@ -28,7 +28,7 @@ export function TranslationModule() {
   const [tab, setTab] = useState<TabType>('practice')
 
   return (
-    <div className="p-6 max-w-7xl mx-auto animate-fadeIn">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto animate-fadeIn">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900 mb-1">翻译练习</h1>
         <p className="text-sm text-gray-400">AI智能评分 · 多维度分析 · 翻译技巧指导</p>

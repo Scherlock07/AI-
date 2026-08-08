@@ -4,11 +4,17 @@ import { create } from 'zustand'
 interface UIState {
   sidebarCollapsed: boolean
   toggleSidebar: () => void
+  mobileSidebarOpen: boolean
+  setMobileSidebarOpen: (open: boolean) => void
+  toggleMobileSidebar: () => void
 }
 
 export const useStore = create<UIState>((set) => ({
   sidebarCollapsed: false,
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+  mobileSidebarOpen: false,
+  setMobileSidebarOpen: (open: boolean) => set({ mobileSidebarOpen: open }),
+  toggleMobileSidebar: () => set((state) => ({ mobileSidebarOpen: !state.mobileSidebarOpen })),
 }))
 
 // ========== Fallback mock data (used when API fails) ==========
