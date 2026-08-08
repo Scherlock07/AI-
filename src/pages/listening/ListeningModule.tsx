@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { listeningApi } from '@/api/client'
 import { useToast } from '@/contexts/ToastContext'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card'
@@ -118,7 +118,7 @@ function LibraryView() {
     return (
       <div className="space-y-4">
         <Skeleton className="h-20 w-full rounded-2xl" />
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Skeleton className="h-40 rounded-2xl" />
           <Skeleton className="h-40 rounded-2xl" />
         </div>
@@ -169,7 +169,7 @@ function LibraryView() {
           desc="通过AI生成或导入功能添加听力素材"
         />
       ) : (
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {materials.map((m: any) => (
             <Card key={m.id} hover>
               <CardContent className="pt-5">
@@ -292,7 +292,7 @@ function GenerateView() {
   }
 
   return (
-    <div className="grid grid-cols-2 gap-6">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <div className="space-y-4">
         <Card>
           <CardHeader>
@@ -490,21 +490,156 @@ function GenerateView() {
   )
 }
 
+// ===== 精听训练主视图 =====
+
+type PracticeMode = 'intensive' | 'fillblank' | 'dictation' | 'keypoints'
+
+function splitSentences(transcript: string): string[] {
+  return transcript
+    .split(/(?<=[.!?])\s+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 0)
+}
+
 function PracticeView() {
   const { toast } = useToast()
+  const [materials, setMaterials] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [mode, setMode] = useState<PracticeMode>('intensive')
+
+  useEffect(() => {
+    const fetchMaterials = async () => {
+      try {
+        const res = await listeningApi.listMaterials()
+        const data = Array.isArray(res) ? res : (res.materials || res.items || [])
+        setMaterials(data)
+        if (data.length > 0) setSelectedId(data[0].id)
+      } catch {
+        // 静默失败，下方显示空状态
+      } finally {
+        setLoading(false)
+      }
+    }
+    fetchMaterials()
+    return () => stop()
+  }, [])
+
+  const selectedMaterial = materials.find(m => m.id === selectedId)
+  const sentences = selectedMaterial?.transcript ? splitSentences(selectedMaterial.transcript) : []
+  const accent = selectedMaterial?.accent || 'us'
+
+  const modeOptions: { key: PracticeMode; label: string; icon: any; color: string }[] = [
+    { key: 'intensive', label: '逐句精听', icon: Headphones, color: 'from-blue-400 to-indigo-600' },
+    { key: 'fillblank', label: '填空精听', icon: PenLine, color: 'from-blue-400 to-indigo-600' },
+    { key: 'dictation', label: '听写练习', icon: Mic, color: 'from-purple-400 to-purple-600' },
+    { key: 'keypoints', label: '要点提取', icon: BookMarked, color: 'from-emerald-400 to-emerald-600' },
+  ]
+
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-20 w-full rounded-2xl" />
+        <Skeleton className="h-64 rounded-2xl" />
+      </div>
+    )
+  }
+
+  if (materials.length === 0) {
+    return (
+      <EmptyState
+        icon={<Headphones className="w-8 h-8 text-gray-300" />}
+        title="精听训练需要听力素材"
+        desc="请先在「素材库」或「AI生成」中添加听力素材，然后回到这里进行精听训练"
+      />
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* 素材选择器 */}
+      <Card>
+        <CardContent className="pt-5">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="flex items-center gap-2 shrink-0">
+              <FileAudio className="w-5 h-5 text-indigo-500" />
+              <span className="text-sm font-medium text-gray-700">选择素材</span>
+            </div>
+            <select
+              value={selectedId || ''}
+              onChange={(e) => { stop(); setSelectedId(e.target.value) }}
+              className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400 bg-white"
+            >
+              {materials.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.title} · {m.accent === 'us' ? '美式' : m.accent === 'uk' ? '英式' : '其他'} · {getDifficultyLabel(m.difficulty)}
+                </option>
+              ))}
+            </select>
+            {selectedMaterial && (
+              <div className="flex items-center gap-2 shrink-0">
+                <Badge variant="default">{selectedMaterial.topic || '通用'}</Badge>
+                <Badge variant={selectedMaterial.source === 'ai-generated' ? 'primary' : 'success'}>
+                  {selectedMaterial.source === 'ai-generated' ? 'AI生成' : '导入'}
+                </Badge>
+                <span className={cn('text-xs px-2 py-0.5 rounded-full', getDifficultyColor(selectedMaterial.difficulty))}>
+                  {getDifficultyLabel(selectedMaterial.difficulty)}
+                </span>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 模式切换 */}
+      <div className="flex gap-1 mb-2 bg-gray-100 p-1 rounded-xl w-fit overflow-x-auto max-w-full">
+        {modeOptions.map((m) => {
+          const Icon = m.icon
+          return (
+            <button
+              key={m.key}
+              onClick={() => { stop(); setMode(m.key) }}
+              className={cn(
+                'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap',
+                mode === m.key ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              )}
+            >
+              <Icon className="w-4 h-4" />
+              {m.label}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* 根据模式渲染 */}
+      {sentences.length === 0 ? (
+        <EmptyState
+          icon={<FileAudio className="w-8 h-8 text-gray-300" />}
+          title="该素材没有转写文本"
+          desc="精听训练需要素材包含转写文本（transcript），请在AI生成或导入时确保文本完整"
+        />
+      ) : (
+        <>
+          {mode === 'intensive' && <IntensiveListenView sentences={sentences} accent={accent} />}
+          {mode === 'fillblank' && <FillBlankView sentences={sentences} accent={accent} />}
+          {mode === 'dictation' && <DictationView sentences={sentences} accent={accent} />}
+          {mode === 'keypoints' && <KeyPointsView sentences={sentences} accent={accent} />}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ===== 逐句精听 =====
+
+function IntensiveListenView({ sentences, accent }: { sentences: string[]; accent: string }) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentSentence, setCurrentSentence] = useState(-1)
   const [playbackRate, setPlaybackRate] = useState(1.0)
   const [loopMode, setLoopMode] = useState<'none' | 'sentence' | 'ab'>('none')
   const [showTranscript, setShowTranscript] = useState(true)
-
-  const sentences = [
-    'Good morning everyone.',
-    "Today we're going to discuss the unprecedented challenges that climate change poses to coastal cities around the world.",
-    'Rising sea levels, increased storm frequency, and changing precipitation patterns are forcing urban planners to rethink traditional infrastructure.',
-    "In this lecture, we'll examine three case studies: Miami, Venice, and Jakarta.",
-    'Each city represents a different approach to climate adaptation.',
-  ]
+  const { toast } = useToast()
+  const lang = accentToLang(accent)
 
   useEffect(() => {
     return () => stop()
@@ -528,12 +663,11 @@ function PracticeView() {
       setCurrentSentence(idx)
       speak({
         text: sentences[idx],
-        lang: 'en-US',
+        lang,
         rate: playbackRate,
         onEnd: () => {
           idx++
           if (loopMode === 'sentence') {
-            // 逐句循环模式：重复当前句
             playNext()
           } else {
             playNext()
@@ -546,7 +680,7 @@ function PracticeView() {
       })
     }
     playNext()
-  }, [isPlaying, playbackRate, loopMode, sentences])
+  }, [isPlaying, playbackRate, loopMode, sentences, lang])
 
   const playSentence = (idx: number) => {
     stop()
@@ -554,7 +688,7 @@ function PracticeView() {
     setCurrentSentence(idx)
     speak({
       text: sentences[idx],
-      lang: 'en-US',
+      lang,
       rate: playbackRate,
       onEnd: () => setCurrentSentence(-1),
       onError: () => setCurrentSentence(-1),
@@ -585,11 +719,10 @@ function PracticeView() {
                 <Headphones className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h3 className="font-semibold text-gray-900">Climate Change and Coastal Cities</h3>
-                <p className="text-xs text-gray-400">环境科学 · 美式口音 · 4:05</p>
+                <h3 className="font-semibold text-gray-900">逐句精听模式</h3>
+                <p className="text-xs text-gray-400">共 {sentences.length} 句 · {accent === 'us' ? '美式' : accent === 'uk' ? '英式' : '其他'}口音</p>
               </div>
             </div>
-            <Badge variant="danger">高级</Badge>
           </div>
         </CardHeader>
         <CardContent>
@@ -611,7 +744,7 @@ function PracticeView() {
 
             <div className="flex items-center gap-2 mb-3">
               <span className="text-xs text-gray-400">
-                {currentSentence >= 0 ? `第 ${currentSentence + 1} / ${sentences.length} 句` : '0:00'}
+                {currentSentence >= 0 ? `第 ${currentSentence + 1} / ${sentences.length} 句` : '准备播放'}
               </span>
               <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
                 <div
@@ -619,10 +752,9 @@ function PracticeView() {
                   style={{ width: `${currentSentence >= 0 ? ((currentSentence + 1) / sentences.length) * 100 : 0}%` }}
                 ></div>
               </div>
-              <span className="text-xs text-gray-400">4:05</span>
             </div>
 
-            <div className="flex items-center justify-center gap-3">
+            <div className="flex flex-wrap items-center justify-center gap-3">
               <div className="flex items-center gap-1">
                 {[0.75, 1.0, 1.25, 1.5].map((r) => (
                   <button
@@ -671,74 +803,539 @@ function PracticeView() {
       {showTranscript && (
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>转写文本 & 难点解析</CardTitle>
-              <div className="flex gap-2">
-                <Badge variant="primary">实时转写</Badge>
-                <Badge variant="warning">AI解析</Badge>
-              </div>
-            </div>
+            <CardTitle>转写文本</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
               {sentences.map((s, i) => (
                 <div key={i} className="flex gap-3 group">
-                  <div className="flex items-start gap-2">
-                    <button
-                      onClick={() => playSentence(i)}
-                      className={cn(
-                        'w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 transition-colors',
-                        currentSentence === i
-                          ? 'bg-indigo-500 text-white'
-                          : 'bg-gray-100 hover:bg-indigo-100 text-gray-500 group-hover:text-indigo-600'
-                      )}
-                    >
-                      {currentSentence === i ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                    </button>
-                  </div>
-                  <div className="flex-1">
-                    <p className={cn(
-                      'text-sm leading-relaxed transition-colors',
-                      currentSentence === i ? 'bg-indigo-50 px-2 py-1 rounded text-indigo-700' :
-                      i === 2 ? 'bg-yellow-50 px-2 py-1 rounded' : 'text-gray-700'
-                    )}>
-                      {s}
-                    </p>
-                    {i === 2 && (
-                      <div className="mt-1 p-2 bg-yellow-50 rounded-lg">
-                        <p className="text-xs text-gray-500">
-                          <span className="font-medium text-yellow-600">难点解析：</span>
-                          "precipitation patterns" — 降水模式，precipitation 指大气中水汽凝结降落的总称，包括雨、雪、冰雹等。
-                        </p>
-                      </div>
+                  <button
+                    onClick={() => playSentence(i)}
+                    className={cn(
+                      'w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 transition-colors',
+                      currentSentence === i
+                        ? 'bg-indigo-500 text-white'
+                        : 'bg-gray-100 hover:bg-indigo-100 text-gray-500 group-hover:text-indigo-600'
                     )}
-                  </div>
+                  >
+                    {currentSentence === i ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                  </button>
+                  <p className={cn(
+                    'flex-1 text-sm leading-relaxed transition-colors',
+                    currentSentence === i ? 'bg-indigo-50 px-2 py-1 rounded text-indigo-700' : 'text-gray-700'
+                  )}>
+                    {s}
+                  </p>
                 </div>
               ))}
             </div>
           </CardContent>
         </Card>
       )}
-
-      <div className="grid grid-cols-3 gap-4">
-        {[
-          { title: '填空精听', desc: '根据听到的内容填空', icon: PenLine, color: 'from-blue-400 to-indigo-600' },
-          { title: '听写练习', desc: '逐句听写完整内容', icon: Mic, color: 'from-purple-400 to-purple-600' },
-          { title: '要点提取', desc: '听后提取关键信息', icon: BookMarked, color: 'from-emerald-400 to-emerald-600' },
-        ].map((mode) => {
-          const Icon = mode.icon
-          return (
-            <Card key={mode.title} hover className="p-4 text-center">
-              <div className={cn('w-10 h-10 rounded-xl bg-gradient-to-br flex items-center justify-center mx-auto mb-2', mode.color)}>
-                <Icon className="w-5 h-5 text-white" />
-              </div>
-              <h4 className="text-sm font-medium text-gray-800 mb-1">{mode.title}</h4>
-              <p className="text-xs text-gray-400">{mode.desc}</p>
-            </Card>
-          )
-        })}
-      </div>
     </div>
+  )
+}
+
+// ===== 填空精听 =====
+
+function FillBlankView({ sentences, accent }: { sentences: string[]; accent: string }) {
+  const { toast } = useToast()
+  const [currentIdx, setCurrentIdx] = useState(0)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [userAnswers, setUserAnswers] = useState<Record<number, string[]>>({})
+  const [checked, setChecked] = useState<Record<number, boolean>>({})
+  const lang = accentToLang(accent)
+
+  const sentence = sentences[currentIdx] || ''
+
+  // 为每个句子预生成填空（去掉较长单词）
+  const blanks = useMemo(() => {
+    const words = sentence.replace(/[.,!?;:"]/g, '').split(/\s+/).filter(w => w.length >= 5)
+    // 选取 1-3 个词作为空缺
+    const count = Math.min(words.length, Math.max(1, Math.floor(words.length / 4)))
+    const shuffled = [...words].sort(() => Math.random() - 0.5)
+    return shuffled.slice(0, count).map(w => w.toLowerCase())
+  }, [currentIdx, sentence])
+
+  const blankedWords = useMemo(() => {
+    const words = sentence.split(/(\s+)/)
+    return words.map(w => {
+      const clean = w.replace(/[.,!?;:"]/g, '').toLowerCase()
+      if (blanks.includes(clean)) {
+        return { text: w, isBlank: true, clean }
+      }
+      return { text: w, isBlank: false, clean }
+    })
+  }, [sentence, blanks])
+
+  const handlePlay = () => {
+    if (isPlaying) {
+      stop()
+      setIsPlaying(false)
+      return
+    }
+    setIsPlaying(true)
+    speak({
+      text: sentence,
+      lang,
+      rate: 1.0,
+      onEnd: () => setIsPlaying(false),
+      onError: () => { setIsPlaying(false); toast('播放失败', 'error') },
+    })
+  }
+
+  const handleAnswer = (blankIdx: number, value: string) => {
+    setUserAnswers(prev => ({
+      ...prev,
+      [currentIdx]: { ...(prev[currentIdx] || []), [blankIdx]: value }
+    }))
+  }
+
+  const handleCheck = () => {
+    const answers = userAnswers[currentIdx] || {}
+    let allCorrect = true
+    blanks.forEach((blank, i) => {
+      const userAns = (answers[i] || '').trim().toLowerCase()
+      if (userAns !== blank) allCorrect = false
+    })
+    setChecked(prev => ({ ...prev, [currentIdx]: true }))
+    if (allCorrect) {
+      toast('全部正确！', 'success')
+    } else {
+      toast('部分答案不正确，标红的空格需要修改', 'warning')
+    }
+  }
+
+  const handleNext = () => {
+    stop()
+    setIsPlaying(false)
+    if (currentIdx < sentences.length - 1) {
+      setCurrentIdx(currentIdx + 1)
+    } else {
+      toast('已到达最后一句', 'info')
+    }
+  }
+
+  const handlePrev = () => {
+    stop()
+    setIsPlaying(false)
+    if (currentIdx > 0) setCurrentIdx(currentIdx - 1)
+  }
+
+  let blankCounter = 0
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-400 to-indigo-600 flex items-center justify-center">
+              <PenLine className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-gray-900">填空精听</h3>
+              <p className="text-xs text-gray-400">第 {currentIdx + 1} / {sentences.length} 句</p>
+            </div>
+          </div>
+          <Button size="sm" variant={isPlaying ? 'primary' : 'outline'} onClick={handlePlay}>
+            {isPlaying ? <><Pause className="w-3 h-3" />停止</> : <><Play className="w-3 h-3" />播放</>}
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="p-4 bg-gray-50 rounded-xl mb-4">
+          <p className="text-sm text-gray-700 leading-loose">
+            {blankedWords.map((w, i) => {
+              if (w.isBlank) {
+                const bIdx = blankCounter++
+                const userAns = userAnswers[currentIdx]?.[bIdx] || ''
+                const isCorrect = checked[currentIdx] && userAns.trim().toLowerCase() === w.clean
+                return (
+                  <input
+                    key={i}
+                    value={userAns}
+                    onChange={(e) => handleAnswer(bIdx, e.target.value)}
+                    disabled={checked[currentIdx]}
+                    className={cn(
+                      'inline-block mx-1 px-2 py-0.5 text-sm border-b-2 bg-white rounded-t transition-colors min-w-[80px]',
+                      checked[currentIdx]
+                        ? isCorrect
+                          ? 'border-green-400 text-green-600'
+                          : 'border-red-400 text-red-600'
+                        : 'border-indigo-300 focus:border-indigo-500 text-indigo-600'
+                    )}
+                    style={{ width: `${Math.max(80, w.clean.length * 12)}px` }}
+                    placeholder="___"
+                  />
+                )
+              }
+              return <span key={i}>{w.text}</span>
+            })}
+          </p>
+        </div>
+
+        {/* 正确答案展示（检查后） */}
+        {checked[currentIdx] && (
+          <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+            <p className="text-xs text-gray-500">
+              <span className="font-medium text-blue-600">正确答案：</span>
+              {blanks.join('、')}
+            </p>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between gap-3">
+          <Button size="sm" variant="ghost" onClick={handlePrev} disabled={currentIdx === 0}>
+            <SkipBack className="w-4 h-4" /> 上一句
+          </Button>
+          <div className="flex gap-2">
+            {!checked[currentIdx] ? (
+              <Button size="sm" onClick={handleCheck}>
+                <PenLine className="w-4 h-4" /> 检查答案
+              </Button>
+            ) : (
+              <Button size="sm" variant="ghost" onClick={() => setChecked(prev => ({ ...prev, [currentIdx]: false }))}>
+                重新作答
+              </Button>
+            )}
+          </div>
+          <Button size="sm" variant="ghost" onClick={handleNext} disabled={currentIdx === sentences.length - 1}>
+            下一句 <SkipForward className="w-4 h-4" />
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ===== 听写练习 =====
+
+function DictationView({ sentences, accent }: { sentences: string[]; accent: string }) {
+  const { toast } = useToast()
+  const [currentIdx, setCurrentIdx] = useState(0)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [userText, setUserText] = useState('')
+  const [showResult, setShowResult] = useState(false)
+  const [playCount, setPlayCount] = useState(0)
+  const lang = accentToLang(accent)
+
+  const sentence = sentences[currentIdx] || ''
+
+  const handlePlay = () => {
+    if (isPlaying) {
+      stop()
+      setIsPlaying(false)
+      return
+    }
+    setIsPlaying(true)
+    setPlayCount(prev => prev + 1)
+    speak({
+      text: sentence,
+      lang,
+      rate: 1.0,
+      onEnd: () => setIsPlaying(false),
+      onError: () => { setIsPlaying(false); toast('播放失败', 'error') },
+    })
+  }
+
+  const handleCheck = () => {
+    if (!userText.trim()) {
+      toast('请先输入你听到的内容', 'warning')
+      return
+    }
+    setShowResult(true)
+  }
+
+  const handleNext = () => {
+    stop()
+    setIsPlaying(false)
+    setUserText('')
+    setShowResult(false)
+    setPlayCount(0)
+    if (currentIdx < sentences.length - 1) {
+      setCurrentIdx(currentIdx + 1)
+    } else {
+      toast('已到达最后一句', 'info')
+    }
+  }
+
+  const handlePrev = () => {
+    stop()
+    setIsPlaying(false)
+    setUserText('')
+    setShowResult(false)
+    setPlayCount(0)
+    if (currentIdx > 0) setCurrentIdx(currentIdx - 1)
+  }
+
+  // 逐词对比
+  const originalWords = sentence.split(/\s+/)
+  const userWords = userText.trim().split(/\s+/)
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center">
+              <Mic className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-gray-900">听写练习</h3>
+              <p className="text-xs text-gray-400">第 {currentIdx + 1} / {sentences.length} 句 · 已播放 {playCount} 次</p>
+            </div>
+          </div>
+          <Button size="sm" variant={isPlaying ? 'primary' : 'outline'} onClick={handlePlay}>
+            {isPlaying ? <><Pause className="w-3 h-3" />停止</> : <><Play className="w-3 h-3" />播放</>}
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {!showResult ? (
+          <>
+            <div className="mb-3 p-3 bg-gray-50 rounded-lg">
+              <p className="text-xs text-gray-400">点击播放按钮听句子，然后输入你听到的内容。可重复播放。</p>
+            </div>
+            <textarea
+              value={userText}
+              onChange={(e) => setUserText(e.target.value)}
+              placeholder="在这里输入你听到的英文..."
+              className="w-full min-h-[100px] px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400 resize-y"
+              autoFocus
+            />
+          </>
+        ) : (
+          <div className="space-y-4">
+            {/* 对比结果 */}
+            <div>
+              <div className="text-sm font-medium text-gray-700 mb-2">你的答案 vs 原文（红色为错误/遗漏，绿色为正确）</div>
+              <div className="p-3 bg-gray-50 rounded-lg">
+                <div className="flex flex-wrap gap-1 mb-3">
+                  {originalWords.map((w, i) => {
+                    const userW = userWords[i]?.replace(/[.,!?;:"]/g, '').toLowerCase() || ''
+                    const origW = w.replace(/[.,!?;:"]/g, '').toLowerCase()
+                    const correct = userW === origW
+                    return (
+                      <span key={i} className={cn(
+                        'px-1.5 py-0.5 rounded text-sm',
+                        correct ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                      )}>
+                        {w}
+                      </span>
+                    )
+                  })}
+                </div>
+                <div className="text-xs text-gray-400">你的输入：{userText || '（空）'}</div>
+              </div>
+            </div>
+
+            {/* 统计 */}
+            {(() => {
+              const correctCount = originalWords.filter((w, i) => {
+                const userW = userWords[i]?.replace(/[.,!?;:"]/g, '').toLowerCase() || ''
+                return userW === w.replace(/[.,!?;:"]/g, '').toLowerCase()
+              }).length
+              const accuracy = Math.round((correctCount / originalWords.length) * 100)
+              return (
+                <div className="flex items-center gap-4">
+                  <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+                    <div className={cn('h-full rounded-full transition-all', accuracy >= 80 ? 'bg-green-500' : accuracy >= 50 ? 'bg-yellow-500' : 'bg-red-500')} style={{ width: `${accuracy}%` }}></div>
+                  </div>
+                  <span className={cn('text-sm font-medium', accuracy >= 80 ? 'text-green-600' : accuracy >= 50 ? 'text-yellow-600' : 'text-red-600')}>
+                    {accuracy}% ({correctCount}/{originalWords.length})
+                  </span>
+                </div>
+              )
+            })()}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between gap-3 mt-4">
+          <Button size="sm" variant="ghost" onClick={handlePrev} disabled={currentIdx === 0}>
+            <SkipBack className="w-4 h-4" /> 上一句
+          </Button>
+          <div className="flex gap-2">
+            {!showResult ? (
+              <Button size="sm" onClick={handleCheck}>
+                <PenLine className="w-4 h-4" /> 提交对比
+              </Button>
+            ) : (
+              <Button size="sm" variant="ghost" onClick={() => setShowResult(false)}>
+                重新听写
+              </Button>
+            )}
+          </div>
+          <Button size="sm" variant="ghost" onClick={handleNext} disabled={currentIdx === sentences.length - 1}>
+            下一句 <SkipForward className="w-4 h-4" />
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ===== 要点提取 =====
+
+function KeyPointsView({ sentences, accent }: { sentences: string[]; accent: string }) {
+  const { toast } = useToast()
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [userPoints, setUserPoints] = useState('')
+  const [showResult, setShowResult] = useState(false)
+  const [playCount, setPlayCount] = useState(0)
+  const lang = accentToLang(accent)
+  const fullText = sentences.join(' ')
+
+  const handlePlayAll = () => {
+    if (isPlaying) {
+      stop()
+      setIsPlaying(false)
+      return
+    }
+    setIsPlaying(true)
+    setPlayCount(prev => prev + 1)
+    let idx = 0
+    const playNext = () => {
+      if (idx >= sentences.length) {
+        setIsPlaying(false)
+        return
+      }
+      speak({
+        text: sentences[idx],
+        lang,
+        rate: 1.0,
+        onEnd: () => { idx++; playNext() },
+        onError: () => setIsPlaying(false),
+      })
+    }
+    playNext()
+  }
+
+  const handlePlaySentence = (idx: number) => {
+    if (isPlaying) {
+      stop()
+      setIsPlaying(false)
+      return
+    }
+    setIsPlaying(true)
+    speak({
+      text: sentences[idx],
+      lang,
+      rate: 1.0,
+      onEnd: () => setIsPlaying(false),
+      onError: () => setIsPlaying(false),
+    })
+  }
+
+  const handleSubmit = () => {
+    if (!userPoints.trim()) {
+      toast('请先输入你提取的要点', 'warning')
+      return
+    }
+    setShowResult(true)
+    toast('已生成参考要点，对比看看你遗漏了什么', 'success')
+  }
+
+  // 自动生成参考要点（取每句的关键词组）
+  const referencePoints = useMemo(() => {
+    return sentences.map((s, i) => {
+      // 取句子的前几个实词作为要点摘要
+      const words = s.split(/\s+/).slice(0, 8).join(' ')
+      return `${i + 1}. ${words}${s.split(/\s+/).length > 8 ? '...' : ''}`
+    })
+  }, [sentences])
+
+  const userPointsList = userPoints.split('\n').filter(p => p.trim())
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center">
+              <BookMarked className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-gray-900">要点提取</h3>
+              <p className="text-xs text-gray-400">共 {sentences.length} 句 · 已播放 {playCount} 次</p>
+            </div>
+          </div>
+          <Button size="sm" variant={isPlaying ? 'primary' : 'outline'} onClick={handlePlayAll}>
+            {isPlaying ? <><Pause className="w-3 h-3" />停止</> : <><Play className="w-3 h-3" />播放全文</>}
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {/* 逐句播放按钮 */}
+        <div className="mb-4 p-3 bg-gray-50 rounded-lg">
+          <p className="text-xs text-gray-400 mb-2">也可逐句播放：</p>
+          <div className="flex flex-wrap gap-2">
+            {sentences.map((_, i) => (
+              <button
+                key={i}
+                onClick={() => handlePlaySentence(i)}
+                className="px-2.5 py-1 text-xs bg-white text-gray-500 rounded-lg hover:bg-indigo-50 hover:text-indigo-600 transition-colors border border-gray-200"
+              >
+                句 {i + 1}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {!showResult ? (
+          <>
+            <div className="mb-3 p-3 bg-amber-50 rounded-lg">
+              <p className="text-xs text-amber-600">
+                听完全文后，在下方输入你提取的关键要点（每行一个要点），然后提交对比参考答案。
+              </p>
+            </div>
+            <textarea
+              value={userPoints}
+              onChange={(e) => setUserPoints(e.target.value)}
+              placeholder={'例：\n1. 全球变暖导致海平面上升\n2. 沿海城市需要重新规划基础设施\n3. ...'}
+              className="w-full min-h-[120px] px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400 resize-y"
+            />
+            <div className="mt-3">
+              <Button onClick={handleSubmit} disabled={!userPoints.trim()}>
+                <BookMarked className="w-4 h-4" /> 提交并查看参考要点
+              </Button>
+            </div>
+          </>
+        ) : (
+          <div className="space-y-4">
+            {/* 用户答案 */}
+            <div>
+              <div className="text-sm font-medium text-gray-700 mb-2">你的要点（{userPointsList.length} 条）</div>
+              <div className="p-3 bg-indigo-50 rounded-lg space-y-1">
+                {userPointsList.map((p, i) => (
+                  <p key={i} className="text-sm text-gray-700">{p}</p>
+                ))}
+              </div>
+            </div>
+
+            {/* 参考要点 */}
+            <div>
+              <div className="text-sm font-medium text-gray-700 mb-2">参考要点（基于原文 {sentences.length} 句）</div>
+              <div className="p-3 bg-emerald-50 rounded-lg space-y-1">
+                {referencePoints.map((p, i) => (
+                  <p key={i} className="text-sm text-gray-700">{p}</p>
+                ))}
+              </div>
+            </div>
+
+            <div className="p-3 bg-gray-50 rounded-lg">
+              <p className="text-xs text-gray-500">
+                提示：参考要点是按原文句子提取的摘要。你可以对比自己的要点，看看遗漏了哪些关键信息。
+                完整理解听力内容后，尝试用自己的话概括要点效果更好。
+              </p>
+            </div>
+
+            <Button variant="ghost" onClick={() => setShowResult(false)}>
+              重新作答
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 
