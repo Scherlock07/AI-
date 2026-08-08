@@ -3,6 +3,8 @@
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
 from contextlib import asynccontextmanager
 
 from app.config import settings
@@ -71,19 +73,37 @@ app.include_router(teacher.router)
 app.include_router(profile.router)
 
 
-@app.get("/", tags=["健康检查"])
-async def root():
-    return {
-        "status": "running",
-        "app": settings.APP_NAME,
-        "version": settings.APP_VERSION,
-        "docs": "/docs",
-    }
-
-
 @app.get("/api/health", tags=["健康检查"])
 async def health():
     return {"status": "healthy"}
+
+
+# ========== 静态前端文件托管 ==========
+
+# dist 目录路径（相对于 backend/app/main.py 向上两级）
+_DIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "dist")
+
+
+def _serve_spa():
+    """返回前端 index.html"""
+    index_path = os.path.join(_DIST_DIR, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return JSONResponse({"error": "Frontend not built. Run: npm run build"}, status_code=404)
+
+
+# 所有非 /api/ 开头的路径都返回前端页面（SPA 路由）
+@app.get("/{full_path:path}")
+async def serve_frontend(full_path: str):
+    # API 路径未匹配则返回 404
+    if full_path.startswith("api/"):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    # 尝试返回静态文件（CSS/JS/图片等）
+    file_path = os.path.join(_DIST_DIR, full_path)
+    if os.path.exists(file_path) and os.path.isfile(file_path):
+        return FileResponse(file_path)
+    # SPA 回退：返回 index.html
+    return _serve_spa()
 
 
 def _create_default_admin():

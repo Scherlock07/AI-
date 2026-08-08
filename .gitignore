@@ -41,3 +41,4 @@ Thumbs.db
 # Temporary
 *.tmp
 md2docx.*
+tsconfig.tsbuildinfo
