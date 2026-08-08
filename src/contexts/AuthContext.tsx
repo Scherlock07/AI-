@@ -12,6 +12,7 @@ interface AuthUser {
   level: string
   total_points: number
   streak: number
+  created_at?: string
 }
 
 interface AuthContextType {
