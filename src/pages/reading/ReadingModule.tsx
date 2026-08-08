@@ -19,7 +19,7 @@ export function ReadingModule() {
   const [tab, setTab] = useState<TabType>('library')
 
   return (
-    <div className="p-6 max-w-7xl mx-auto animate-fadeIn">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto animate-fadeIn">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900 mb-1">阅读练习</h1>
         <p className="text-sm text-gray-400">文本导入 · AI释义 · 逻辑可视化 · 长难句分析 · 双语对照</p>

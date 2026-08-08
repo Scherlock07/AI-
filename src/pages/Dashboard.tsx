@@ -72,13 +72,13 @@ export function Dashboard() {
 
   if (loading) {
     return (
-      <div className="p-6 max-w-7xl mx-auto space-y-6">
+      <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
         <Skeleton className="h-32 w-full rounded-3xl" />
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
           {[1,2,3,4].map(i => <Skeleton key={i} className="h-36 rounded-2xl" />)}
         </div>
-        <div className="grid grid-cols-3 gap-6">
-          <div className="col-span-2 space-y-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-6">
             <Skeleton className="h-64 rounded-2xl" />
             <Skeleton className="h-64 rounded-2xl" />
           </div>
@@ -96,25 +96,25 @@ export function Dashboard() {
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto animate-fadeIn">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto animate-fadeIn">
       {/* Welcome Banner */}
-      <div className="mb-6 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-500 rounded-3xl p-8 text-white relative overflow-hidden">
+      <div className="mb-6 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-500 rounded-3xl p-5 sm:p-8 text-white relative overflow-hidden">
         <div className="relative z-10">
-          <h1 className="text-2xl font-bold mb-2">{greeting}，{user?.display_name || '同学'} 👋</h1>
+          <h1 className="text-xl sm:text-2xl font-bold mb-2">{greeting}，{user?.display_name || '同学'} 👋</h1>
           <p className="text-white/80 text-sm mb-4">今天是连续学习的第 <span className="font-bold text-lg">{stats?.streak || 0}</span> 天，继续保持！</p>
-          <div className="flex gap-6">
+          <div className="flex gap-4 sm:gap-6">
             <div>
-              <div className="text-3xl font-bold">{stats?.total_study_time || 0}</div>
+              <div className="text-2xl sm:text-3xl font-bold">{stats?.total_study_time || 0}</div>
               <div className="text-xs text-white/70">累计学习（分钟）</div>
             </div>
             <div className="w-px bg-white/20"></div>
             <div>
-              <div className="text-3xl font-bold">{stats?.total_exercises || 0}</div>
+              <div className="text-2xl sm:text-3xl font-bold">{stats?.total_exercises || 0}</div>
               <div className="text-xs text-white/70">完成练习数</div>
             </div>
             <div className="w-px bg-white/20"></div>
             <div>
-              <div className="text-3xl font-bold">{user?.total_points || 0}</div>
+              <div className="text-2xl sm:text-3xl font-bold">{user?.total_points || 0}</div>
               <div className="text-xs text-white/70">总积分</div>
             </div>
           </div>
@@ -124,7 +124,7 @@ export function Dashboard() {
       </div>
 
       {/* Module Quick Access */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-6">
         {moduleCards.map((mod) => {
           const Icon = mod.icon
           return (
@@ -143,9 +143,9 @@ export function Dashboard() {
         })}
       </div>
 
-      <div className="grid grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column */}
-        <div className="col-span-2 space-y-6">
+        <div className="lg:col-span-2 space-y-6">
           {/* Today's Tasks */}
           <Card>
             <CardHeader>

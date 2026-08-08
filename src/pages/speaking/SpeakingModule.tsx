@@ -22,13 +22,13 @@ export function SpeakingModule() {
   const [tab, setTab] = useState<TabType>('presentation')
 
   return (
-    <div className="p-6 max-w-7xl mx-auto animate-fadeIn">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto animate-fadeIn">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900 mb-1">口语练习</h1>
         <p className="text-sm text-gray-400">课堂评分 · Presentation · 讨论房间 · 人机对话 · 复述练习</p>
       </div>
 
-      <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-xl w-fit flex-wrap">
+      <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-xl w-fit flex-wrap overflow-x-auto max-w-full">
         {[
           { key: 'classroom' as TabType, label: '课堂评分', icon: GraduationCap },
           { key: 'presentation' as TabType, label: 'Presentation', icon: Presentation },
@@ -147,7 +147,7 @@ function ScoreDisplay({ scores, feedback, referenceAnswer }: { scores: any[]; fe
             </div>
             <CheckCircle2 className="w-12 h-12 text-green-500" />
           </div>
-          <div className="grid grid-cols-5 gap-3">
+          <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 sm:gap-3">
             {scores.map((s, i) => (
               <div key={i} className="text-center">
                 <div className={cn('text-lg font-bold', getScoreColor(s.score || 0))}>{s.score || 0}</div>
@@ -194,7 +194,7 @@ function ScoreDisplay({ scores, feedback, referenceAnswer }: { scores: any[]; fe
 // ===== Classroom View =====
 function ClassroomView() {
   return (
-    <div className="grid grid-cols-2 gap-6">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <div className="space-y-4">
         <Card>
           <CardHeader>
@@ -279,7 +279,7 @@ function PresentationView() {
   }
 
   return (
-    <div className="grid grid-cols-2 gap-6">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <div className="space-y-4">
         {phase === 'topic' && (
           <Card>
@@ -714,7 +714,7 @@ function CreateRoomView({ onCreated, onBack }: { onCreated: (roomId: string) => 
               </div>
 
               {/* 分类和难度 */}
-              <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
                 <div>
                   <label className="text-sm font-medium text-gray-700 mb-1.5 block">话题分类</label>
                   <select
@@ -911,6 +911,7 @@ function CreateRoomView({ onCreated, onBack }: { onCreated: (roomId: string) => 
               <div className="grid grid-cols-2 gap-3">
                 <div className="p-3 bg-gray-50 rounded-lg">
                   <p className="text-xs text-gray-500 mb-1">参与人数</p>
+
                   <p className="text-sm font-medium text-gray-800">{form.max_participants} 人</p>
                 </div>
                 <div className="p-3 bg-purple-50 rounded-lg">
@@ -1105,7 +1106,7 @@ function RoomInteriorView({ roomId, onBack }: { roomId: string; onBack: () => vo
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* 左侧：参与者列表 */}
         <div className="space-y-4">
           <Card>
@@ -1481,7 +1482,7 @@ function ConversationView() {
   }
 
   return (
-    <div className="grid grid-cols-2 gap-6">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <div className="space-y-4">
         <Card>
           <CardHeader>
@@ -1644,7 +1645,7 @@ function RetellingView() {
   }
 
   return (
-    <div className="grid grid-cols-2 gap-6">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <div className="space-y-4">
         {phase === 'settings' && (
           <Card>
@@ -1867,7 +1868,7 @@ function HistoryView() {
                 </div>
               </div>
               {scores.length > 0 && (
-                <div className="grid grid-cols-5 gap-3 mb-3">
+                <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 sm:gap-3 mb-3">
                   {scores.map((s: any, i: number) => (
                     <div key={i} className="text-center">
                       <div className={cn('text-sm font-bold', getScoreColor(s.score || 0))}>{s.score || 0}</div>

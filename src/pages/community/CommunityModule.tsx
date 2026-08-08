@@ -18,7 +18,7 @@ export function CommunityModule() {
   const [tab, setTab] = useState<TabType>('groups')
 
   return (
-    <div className="p-6 max-w-7xl mx-auto animate-fadeIn">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto animate-fadeIn">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900 mb-1">学习社区</h1>
         <p className="text-sm text-gray-400">学习小组 · 写作互评 · 排行榜 · 成就系统</p>
@@ -109,7 +109,7 @@ function GroupsView() {
     return (
       <div className="space-y-4">
         <Skeleton className="h-20 w-full rounded-2xl" />
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Skeleton className="h-40 rounded-2xl" />
           <Skeleton className="h-40 rounded-2xl" />
         </div>
@@ -166,7 +166,7 @@ function GroupsView() {
       {groups.length === 0 ? (
         <EmptyState icon={<Users className="w-8 h-8 text-gray-300" />} title="暂无学习小组" desc="创建一个小组，邀请同学一起学习" />
       ) : (
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {groups.map((g) => (
             <Card key={g.id} hover>
               <CardContent className="pt-5">
@@ -221,7 +221,7 @@ function PeerReviewView() {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -297,7 +297,7 @@ function LeaderboardView() {
   if (loading) {
     return (
       <div className="space-y-4">
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <Skeleton className="h-32 rounded-2xl" />
           <Skeleton className="h-32 rounded-2xl" />
           <Skeleton className="h-32 rounded-2xl" />
@@ -324,7 +324,7 @@ function LeaderboardView() {
   return (
     <div className="space-y-4">
       {rankings.length >= 3 && (
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {rankings.slice(0, 3).map((r, idx) => {
             const rank = r.rank || idx + 1
             const avatars = ['🥇', '🥈', '🥉']
@@ -425,7 +425,7 @@ function AchievementsView() {
     return (
       <div className="space-y-4">
         <Skeleton className="h-24 w-full rounded-2xl" />
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {[1, 2, 3].map(i => <Skeleton key={i} className="h-48 rounded-2xl" />)}
         </div>
       </div>
@@ -452,7 +452,7 @@ function AchievementsView() {
     <div className="space-y-4">
       <Card className="bg-gradient-to-r from-purple-50 to-indigo-50 border-purple-100">
         <CardContent className="pt-5">
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="text-center">
               <div className="text-3xl font-bold text-purple-600">{unlocked.length}</div>
               <div className="text-sm text-gray-400">已解锁</div>
@@ -469,7 +469,7 @@ function AchievementsView() {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {achievements.map((a) => {
           const isUnlocked = a.unlocked_at || a.unlockedAt
           return (

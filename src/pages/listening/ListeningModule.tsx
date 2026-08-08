@@ -20,7 +20,7 @@ export function ListeningModule() {
   const [tab, setTab] = useState<TabType>('library')
 
   return (
-    <div className="p-6 max-w-7xl mx-auto animate-fadeIn">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto animate-fadeIn">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900 mb-1">听力练习</h1>
         <p className="text-sm text-gray-400">AI生成素材 · 实时转写 · 精听训练 · 语境词汇</p>

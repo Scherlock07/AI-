@@ -5,7 +5,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import {
   LayoutDashboard, Headphones, Mic, BookOpen, PenLine,
   BookMarked, Languages, Users, GraduationCap, User,
-  ChevronLeft, Sparkles, LogOut,
+  ChevronLeft, Sparkles, LogOut, X,
 } from 'lucide-react'
 
 const navItems = [
@@ -29,7 +29,7 @@ const groupLabels: Record<string, string> = {
 }
 
 export function Sidebar() {
-  const { sidebarCollapsed, toggleSidebar } = useStore()
+  const { sidebarCollapsed, toggleSidebar, mobileSidebarOpen, setMobileSidebarOpen } = useStore()
   const { user, logout } = useAuth()
   const navigate = useNavigate()
 
@@ -38,21 +38,36 @@ export function Sidebar() {
     navigate('/login')
   }
 
+  const handleNavClick = () => {
+    setMobileSidebarOpen(false)
+  }
+
   return (
     <aside
       className={cn(
-        'flex flex-col bg-white border-r border-gray-100 transition-all duration-300 z-30',
-        sidebarCollapsed ? 'w-16' : 'w-60'
+        'flex flex-col bg-white border-r border-gray-100 transition-all duration-300 h-full',
+        // Mobile: drawer controlled by mobileSidebarOpen; Desktop: always visible
+        'lg:relative lg:translate-x-0',
+        mobileSidebarOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full lg:translate-x-0',
+        // Width: mobile always w-72, desktop controlled by sidebarCollapsed
+        'w-72',
+        sidebarCollapsed ? 'lg:w-16' : 'lg:w-60',
       )}
     >
       {/* Logo */}
-      <div className="flex items-center gap-2 px-4 h-16 border-b border-gray-50">
+      <div className="flex items-center gap-2 px-4 h-16 border-b border-gray-50 shrink-0">
         <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center shrink-0 shadow-lg shadow-indigo-200">
           <Sparkles className="w-5 h-5 text-white" />
         </div>
-        {!sidebarCollapsed && (
-          <span className="font-bold text-gray-900 text-sm whitespace-nowrap">AI外语学习平台</span>
-        )}
+        <span className={cn('font-bold text-gray-900 text-sm whitespace-nowrap', sidebarCollapsed && 'lg:hidden')}>
+          AI外语学习平台
+        </span>
+        <button
+          onClick={() => setMobileSidebarOpen(false)}
+          className="ml-auto lg:hidden p-1.5 rounded-lg hover:bg-gray-50 text-gray-400"
+        >
+          <X className="w-5 h-5" />
+        </button>
       </div>
 
       {/* Navigation */}
@@ -65,8 +80,11 @@ export function Sidebar() {
           }, {} as Record<string, typeof navItems>)
         ).map(([group, items]) => (
           <div key={group} className="mb-4">
-            {!sidebarCollapsed && groupLabels[group] && (
-              <div className="px-3 py-1.5 text-xs font-medium text-gray-400 uppercase tracking-wider">
+            {groupLabels[group] && (
+              <div className={cn(
+                'px-3 py-1.5 text-xs font-medium text-gray-400 uppercase tracking-wider',
+                sidebarCollapsed && 'lg:hidden'
+              )}>
                 {groupLabels[group]}
               </div>
             )}
@@ -77,19 +95,22 @@ export function Sidebar() {
                   key={item.to}
                   to={item.to}
                   end={item.to === '/'}
+                  onClick={handleNavClick}
                   className={({ isActive }) =>
                     cn(
                       'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all mb-0.5',
                       isActive
                         ? 'bg-gradient-to-r from-indigo-50 to-purple-50 text-indigo-700'
                         : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900',
-                      sidebarCollapsed && 'justify-center'
+                      sidebarCollapsed && 'lg:justify-center'
                     )
                   }
                   title={sidebarCollapsed ? item.label : undefined}
                 >
                   <Icon className="w-5 h-5 shrink-0" />
-                  {!sidebarCollapsed && <span className="whitespace-nowrap">{item.label}</span>}
+                  <span className={cn('whitespace-nowrap', sidebarCollapsed && 'lg:hidden')}>
+                    {item.label}
+                  </span>
                 </NavLink>
               )
             })}
@@ -98,31 +119,29 @@ export function Sidebar() {
       </nav>
 
       {/* User info */}
-      {!sidebarCollapsed && (
-        <div className="px-3 py-3 border-t border-gray-50">
-          <div className="flex items-center gap-3 px-2">
-            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-400 to-purple-400 flex items-center justify-center text-lg shadow-md">
-              {user?.avatar || '🦉'}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-gray-900 truncate">{user?.display_name || '用户'}</div>
-              <div className="text-xs text-gray-400">{user?.role === 'teacher' ? '教师' : '学生'} · {user?.total_points || 0} 积分</div>
-            </div>
-            <button
-              onClick={handleLogout}
-              className="p-1.5 rounded-lg hover:bg-gray-50 text-gray-400 hover:text-red-500 transition-colors"
-              title="退出登录"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
+      <div className="px-3 py-3 border-t border-gray-50 shrink-0">
+        <div className="flex items-center gap-3 px-2">
+          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-400 to-purple-400 flex items-center justify-center text-lg shadow-md shrink-0">
+            {user?.avatar || '🦉'}
           </div>
+          <div className={cn('flex-1 min-w-0', sidebarCollapsed && 'lg:hidden')}>
+            <div className="text-sm font-medium text-gray-900 truncate">{user?.display_name || '用户'}</div>
+            <div className="text-xs text-gray-400">{user?.role === 'teacher' ? '教师' : '学生'} · {user?.total_points || 0} 积分</div>
+          </div>
+          <button
+            onClick={handleLogout}
+            className="p-1.5 rounded-lg hover:bg-gray-50 text-gray-400 hover:text-red-500 transition-colors shrink-0"
+            title="退出登录"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
-      )}
+      </div>
 
-      {/* Collapse button */}
+      {/* Collapse button - desktop only */}
       <button
         onClick={toggleSidebar}
-        className="absolute top-7 -right-3 w-6 h-6 rounded-full bg-white border border-gray-200 shadow-sm flex items-center justify-center hover:bg-gray-50 transition-colors"
+        className="hidden lg:flex absolute top-7 -right-3 w-6 h-6 rounded-full bg-white border border-gray-200 shadow-sm items-center justify-center hover:bg-gray-50 transition-colors"
       >
         <ChevronLeft className={cn('w-4 h-4 text-gray-400 transition-transform', sidebarCollapsed && 'rotate-180')} />
       </button>
