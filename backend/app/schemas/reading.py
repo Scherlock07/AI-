@@ -25,6 +25,42 @@ class ReadingAnalysisResult(BaseModel):
     vocabulary: list[dict] = []
 
 
+class WordAnalysisRequest(BaseModel):
+    word: str
+    context: str = ""
+
+
+class WordAnalysisResult(BaseModel):
+    word: str
+    phonetic: str = ""
+    partOfSpeech: str = ""
+    definition: str = ""
+    definition_en: str = ""
+    synonyms: list[str] = []
+    antonyms: list[str] = []
+    collocations: list[str] = []
+    examples: list[str] = []
+    etymology: str = ""
+    difficulty: str = ""
+    note: str = ""
+
+
+class SentenceAnalysisRequest(BaseModel):
+    sentence: str
+    difficulty: str = "intermediate"
+
+
+class SentenceAnalysisResult(BaseModel):
+    sentence: str
+    translation: str = ""
+    structure: str = ""
+    clauses: list[dict] = []
+    key_phrases: list[dict] = []
+    grammar_points: list[str] = []
+    vocabulary: list[dict] = []
+    tip: str = ""
+
+
 class ReadingTextResponse(BaseModel):
     id: str
     title: str
