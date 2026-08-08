@@ -10,3 +10,4 @@ httpx==0.27.2
 aiofiles==24.1.0
 python-dotenv==1.0.1
 openai==1.51.0
+email-validator==2.2.0
