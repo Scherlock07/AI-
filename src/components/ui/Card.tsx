@@ -6,12 +6,14 @@ interface CardProps {
   className?: string
   onClick?: () => void
   hover?: boolean
+  style?: React.CSSProperties
 }
 
-export function Card({ children, className, onClick, hover }: CardProps) {
+export function Card({ children, className, onClick, hover, style }: CardProps) {
   return (
     <div
       onClick={onClick}
+      style={style}
       className={cn(
         'bg-white rounded-2xl border border-gray-100/80 shadow-sm shadow-gray-100',
         hover && 'transition-all duration-200 hover:shadow-lg hover:shadow-gray-200/50 hover:border-indigo-200/50 hover:-translate-y-0.5 cursor-pointer',

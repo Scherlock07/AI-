@@ -397,7 +397,7 @@ function RootsView() {
               placeholder="输入英文单词，如 unprecedented"
               className="flex-1 px-4 py-2.5 text-sm bg-white rounded-xl border border-gray-200 focus:outline-none focus:border-indigo-400"
             />
-            <Button variant="gradient" onClick={handleAnalyze} disabled={loading || !word}>
+            <Button variant="gradient" onClick={() => handleAnalyze()} disabled={loading || !word}>
               {loading ? <LoadingSpinner size="sm" /> : <Sparkles className="w-4 h-4" />}
               分析
             </Button>
