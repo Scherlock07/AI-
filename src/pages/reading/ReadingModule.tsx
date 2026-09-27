@@ -104,7 +104,7 @@ function LibraryView({ onAnalyze }: { onAnalyze: (content: string) => void }) {
     return (
       <div className="space-y-4">
         <Skeleton className="h-20 w-full rounded-2xl" />
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Skeleton className="h-40 rounded-2xl" />
           <Skeleton className="h-40 rounded-2xl" />
         </div>
@@ -143,7 +143,7 @@ function LibraryView({ onAnalyze }: { onAnalyze: (content: string) => void }) {
           desc="通过导入功能添加阅读材料，AI将自动进行分析"
         />
       ) : (
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {texts.map((t) => (
             <Card key={t.id} hover>
               <CardContent className="pt-5">
@@ -301,7 +301,7 @@ function ImportView() {
       />
 
       {/* Import Methods */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {importModes.map((mode) => {
           const Icon = mode.icon
           const isActive = activeMode === mode.key
@@ -350,7 +350,7 @@ function ImportView() {
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="text-sm font-medium text-gray-700 mb-1.5 block">标题</label>
                 <input
@@ -959,7 +959,7 @@ function AnalyzeView({ initialContent }: { initialContent?: string }) {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {result.vocabulary.map((v: any, i: number) => (
                 <VocabItem key={i} v={v} onAnalyze={() => handleWordClick(v.word)} />
               ))}
@@ -1013,7 +1013,7 @@ function AnalyzeView({ initialContent }: { initialContent?: string }) {
             <CardTitle className="text-base">文本数据</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="text-center p-2 bg-gray-50 rounded-lg">
                 <div className="text-2xl font-bold text-gray-900">{content.split(/\s+/).filter(Boolean).length}</div>
                 <div className="text-xs text-gray-400">总词数</div>

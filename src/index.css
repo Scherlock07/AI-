@@ -128,3 +128,28 @@ body {
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
+
+/* ===== Mobile interaction fixes ===== */
+/* iOS Safari: 聚焦输入框时字体小于16px会触发页面自动放大，移动端统一提升到16px */
+@media (max-width: 767px) {
+  input[type='text'],
+  input[type='password'],
+  input[type='email'],
+  input[type='number'],
+  input[type='search'],
+  input[type='tel'],
+  input[type='url'],
+  input:not([type]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* 触摸设备：去掉输入框聚焦时的iOS高亮蒙层 */
+input,
+textarea,
+select,
+button {
+  -webkit-tap-highlight-color: transparent;
+}
