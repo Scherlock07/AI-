@@ -23,8 +23,8 @@ services:
       # 语音服务（可选，未配置时自动降级浏览器 TTS）
       - AZURE_SPEECH_KEY=${AZURE_SPEECH_KEY:-}
       - AZURE_SPEECH_REGION=${AZURE_SPEECH_REGION:-eastasia}
-      # 允许的跨域来源（改成你的域名或留 IP）
-      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      # 允许的跨域来源（pydantic列表类型，必须是JSON数组格式）
+      - CORS_ORIGINS=${CORS_ORIGINS:-["*"]}
     restart: unless-stopped
     # 健康检查：接口不可用时自动重启
     healthcheck:
