@@ -86,7 +86,7 @@ function GradingView() {
   }
 
   return (
-    <div className="grid grid-cols-2 gap-6">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       {/* Input Section */}
       <div className="space-y-4">
         <Card>
@@ -797,7 +797,7 @@ function HistoryView() {
             </div>
 
             {w.scores && w.scores.length > 0 && (
-              <div className="grid grid-cols-6 gap-3 mb-3">
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-3">
                 {w.scores.map((s: any) => (
                   <div key={s.name} className="text-center">
                     <div className={cn('text-sm font-bold mb-1', getScoreColor(s.score))}>{s.score}</div>

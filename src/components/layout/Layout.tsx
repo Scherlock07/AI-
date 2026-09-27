@@ -7,7 +7,7 @@ export function Layout() {
   const { mobileSidebarOpen, setMobileSidebarOpen } = useStore()
 
   return (
-    <div className="flex h-screen overflow-hidden bg-gray-50">
+    <div className="flex h-dvh overflow-hidden bg-gray-50">
       {/* Mobile overlay */}
       {mobileSidebarOpen && (
         <div

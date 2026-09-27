@@ -1395,7 +1395,7 @@ function VocabPracticeView() {
             ))}
           </div>
 
-          <div className="mt-6 grid grid-cols-3 gap-3">
+          <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3">
             {[
               { title: '选词填空', desc: '从列表中选择正确单词填入句子' },
               { title: '释义匹配', desc: '将单词与正确释义配对' },
