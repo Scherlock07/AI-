@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { profileApi } from '@/api/client'
+import { trackFeatureUse } from '@/lib/tracker'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card'
@@ -64,6 +65,7 @@ export function LearningProfile() {
     const currentInput = aiInput
     setAiInput('')
     setAiLoading(true)
+    trackFeatureUse('profile', 'ai_assistant')
     try {
       const res = await profileApi.askAssistant(currentInput)
       setAiMessages(prev => [...prev, {
