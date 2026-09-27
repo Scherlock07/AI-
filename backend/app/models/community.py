@@ -86,3 +86,34 @@ class LearningStats(Base):
     study_time = Column(Integer, default=0)  # 分钟
     exercise_count = Column(Integer, default=0)
     avg_score = Column(Float, default=0.0)
+
+
+class Feedback(Base):
+    """用户意见反馈"""
+    __tablename__ = "feedback"
+
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=True)  # 允许匿名
+    category = Column(String(30), nullable=False)  # bug / ux / feature / content / other
+    content = Column(Text, nullable=False)
+    contact = Column(String(100), default="")  # 可选联系方式
+    page = Column(String(200), default="")  # 反馈时所在页面路径
+    user_agent = Column(String(300), default="")
+    device = Column(String(20), default="")  # mobile / desktop
+    status = Column(String(20), default="pending")  # pending / processing / resolved
+    reply = Column(Text, default="")  # 处理回复
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class UsageEvent(Base):
+    """用户行为埋点事件（使用数据收集）"""
+    __tablename__ = "usage_events"
+
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=True)
+    event_type = Column(String(30), nullable=False)  # page_view / module_duration / feature_use
+    module = Column(String(30), default="")  # listening / speaking / reading / ...
+    action = Column(String(60), default="")  # 具体动作，如 grade_writing / ai_chat
+    detail = Column(Text, default="{}")  # JSON 附加信息
+    device = Column(String(20), default="")  # mobile / desktop
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)

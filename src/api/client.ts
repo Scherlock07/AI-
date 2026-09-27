@@ -313,6 +313,37 @@ export const profileApi = {
     request(`/api/profile/ai-assistant?message=${encodeURIComponent(message)}&context=${encodeURIComponent(context)}`, { method: 'POST' }),
 }
 
+// ========== 意见反馈 API ==========
+
+export const feedbackApi = {
+  submit: (data: { category: string; content: string; contact?: string; page?: string }) =>
+    request('/api/feedback', { method: 'POST', body: JSON.stringify(data) }),
+
+  list: (status?: string) =>
+    request(status ? `/api/feedback?status=${encodeURIComponent(status)}` : '/api/feedback'),
+
+  update: (id: string, data: { status: string; reply?: string }) =>
+    request(`/api/feedback/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+}
+
+// ========== 使用数据埋点 API ==========
+
+export const analyticsApi = {
+  /** 批量上报埋点事件 */
+  track: (events: Array<{
+    event_type: string
+    module?: string
+    action?: string
+    detail?: Record<string, unknown>
+    device?: string
+    client_time?: string
+  }>) =>
+    request('/api/analytics/track', { method: 'POST', body: JSON.stringify({ events }) }),
+
+  /** 使用数据汇总（教师） */
+  summary: (days: number = 14) => request(`/api/analytics/summary?days=${days}`),
+}
+
 // ========== 导出 ==========
 
 export default {
@@ -326,4 +357,6 @@ export default {
   community: communityApi,
   teacher: teacherApi,
   profile: profileApi,
+  feedback: feedbackApi,
+  analytics: analyticsApi,
 }

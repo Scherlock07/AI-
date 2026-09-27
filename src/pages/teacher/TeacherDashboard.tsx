@@ -7,17 +7,23 @@ import { Button } from '@/components/ui/Button'
 import { Progress } from '@/components/ui/Progress'
 import { Skeleton, ErrorState, EmptyState, LoadingSpinner } from '@/components/ui/Loading'
 import { cn, getScoreColor } from '@/lib/utils'
+import { FeedbackView } from './FeedbackView'
+import { AnalyticsView } from './AnalyticsView'
 import {
   GraduationCap, Users, FileText, TrendingUp, Download,
   Bell, ClipboardList, BarChart3, Settings, Plus,
+  MessageSquarePlus, Activity, LayoutGrid,
 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, Radar,
 } from 'recharts'
 
+type ViewType = 'classes' | 'feedback' | 'analytics'
+
 export function TeacherDashboard() {
   const { toast } = useToast()
+  const [view, setView] = useState<ViewType>('classes')
   const [classes, setClasses] = useState<any[]>([])
   const [selectedClass, setSelectedClass] = useState<string | null>(null)
   const [students, setStudents] = useState<any[]>([])
@@ -138,13 +144,43 @@ export function TeacherDashboard() {
           <h1 className="text-2xl font-bold text-gray-900 mb-1">教师后台</h1>
           <p className="text-sm text-gray-400">班级管理 · 作业下发 · 数据分析 · 报告导出</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setShowCreate(!showCreate)}>
-            <Plus className="w-4 h-4" />创建班级
-          </Button>
-        </div>
+        {view === 'classes' && (
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setShowCreate(!showCreate)}>
+              <Plus className="w-4 h-4" />创建班级
+            </Button>
+          </div>
+        )}
       </div>
 
+      {/* 视图切换 */}
+      <div className="flex gap-1 mb-6 p-1 bg-gray-100 rounded-xl w-fit">
+        {[
+          { value: 'classes' as ViewType, label: '班级管理', icon: LayoutGrid },
+          { value: 'feedback' as ViewType, label: '意见反馈', icon: MessageSquarePlus },
+          { value: 'analytics' as ViewType, label: '使用数据', icon: Activity },
+        ].map((tab) => {
+          const Icon = tab.icon
+          return (
+            <button
+              key={tab.value}
+              onClick={() => setView(tab.value)}
+              className={cn(
+                'flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-lg text-sm font-medium transition-all',
+                view === tab.value ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700',
+              )}
+            >
+              <Icon className="w-4 h-4" />
+              <span className="hidden sm:inline">{tab.label}</span>
+            </button>
+          )
+        })}
+      </div>
+
+      {view === 'feedback' && <FeedbackView />}
+      {view === 'analytics' && <AnalyticsView />}
+      {view === 'classes' && (
+        <>
       {showCreate && (
         <Card className="mb-4">
           <CardContent className="pt-5">
@@ -335,6 +371,8 @@ export function TeacherDashboard() {
             </Card>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   )

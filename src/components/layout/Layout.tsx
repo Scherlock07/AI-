@@ -1,10 +1,18 @@
-import { Outlet } from 'react-router-dom'
+import { Outlet, useLocation } from 'react-router-dom'
+import { useEffect } from 'react'
 import { Sidebar } from './Sidebar'
 import { Header } from './Header'
 import { useStore } from '@/store/useStore'
+import { trackPageView } from '@/lib/tracker'
 
 export function Layout() {
   const { mobileSidebarOpen, setMobileSidebarOpen } = useStore()
+  const location = useLocation()
+
+  // 使用数据埋点：路由变化自动记录模块访问与停留时长
+  useEffect(() => {
+    trackPageView(location.pathname)
+  }, [location.pathname])
 
   return (
     <div className="flex h-dvh overflow-hidden bg-gray-50">

@@ -7,6 +7,7 @@ import { Skeleton, ErrorState, EmptyState, LoadingSpinner } from '@/components/u
 import { cn, getScoreColor, formatDate } from '@/lib/utils'
 import { writingApi } from '@/api/client'
 import { useToast } from '@/contexts/ToastContext'
+import { trackFeatureUse } from '@/lib/tracker'
 import {
   PenLine, Upload, Camera, FileText, Sparkles, TrendingUp,
   CheckCircle2, Lightbulb, ArrowRight, Star, BookOpen,
@@ -77,6 +78,7 @@ function GradingView() {
         prompt: prompt || 'General writing practice',
         title: title || 'Untitled',
       })
+      trackFeatureUse('writing', 'ai_grade')
       setResult(res)
     } catch (err: any) {
       setError(err.message || '批改失败，请重试')

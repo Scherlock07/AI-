@@ -19,12 +19,12 @@ from app.models.writing import WritingSubmission, WritingPeerReview
 from app.models.vocabulary import VocabularyWord, GrammarExercise, GrammarExerciseRecord, WrongAnswer
 from app.models.community import (
     TranslationExercise, TranslationRecord, StudyGroup, StudyGroupMember,
-    Achievement, LearningStats,
+    Achievement, LearningStats, Feedback, UsageEvent,
 )
 from app.models.teacher import Class, ClassMember, Assignment, ClassroomSpeakingScore
 
 # 导入路由
-from app.routers import auth, listening, speaking, reading, writing, vocabulary, translation, community, teacher, profile
+from app.routers import auth, listening, speaking, reading, writing, vocabulary, translation, community, teacher, profile, feedback, analytics
 
 
 @asynccontextmanager
@@ -71,6 +71,8 @@ app.include_router(translation.router)
 app.include_router(community.router)
 app.include_router(teacher.router)
 app.include_router(profile.router)
+app.include_router(feedback.router)
+app.include_router(analytics.router)
 
 
 @app.get("/api/health", tags=["健康检查"])

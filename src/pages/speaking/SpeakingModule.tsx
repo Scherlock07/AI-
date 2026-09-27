@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { speakingApi, profileApi } from '@/api/client'
+import { trackFeatureUse } from '@/lib/tracker'
 import { useToast } from '@/contexts/ToastContext'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
@@ -283,6 +284,7 @@ function PresentationView() {
   const handleEvaluate = async () => {
     setPhase('loading')
     setError(null)
+    trackFeatureUse('speaking', 'ai_evaluate_presentation')
     try {
       const res = await speakingApi.evaluate({
         type: 'presentation',

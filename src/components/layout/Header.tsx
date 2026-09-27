@@ -2,13 +2,16 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { useStore } from '@/store/useStore'
 import { useNavigate } from 'react-router-dom'
-import { Flame, Bell, Search, MessageCircle, Menu } from 'lucide-react'
+import { Flame, Bell, Search, MessageCircle, Menu, MessageSquarePlus } from 'lucide-react'
+import { useState } from 'react'
+import { FeedbackModal } from '@/components/feedback/FeedbackModal'
 
 export function Header() {
   const { user } = useAuth()
   const { toggleMobileSidebar } = useStore()
   const { toast } = useToast()
   const navigate = useNavigate()
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
 
   return (
     <header className="h-14 lg:h-16 border-b border-gray-100 bg-white/80 backdrop-blur-md flex items-center justify-between px-3 sm:px-4 lg:px-6 z-20 sticky top-0">
@@ -33,6 +36,15 @@ export function Header() {
           <span className="text-sm font-medium text-orange-600">{user?.streak || 0} 天</span>
         </div>
 
+        {/* Feedback */}
+        <button
+          onClick={() => setFeedbackOpen(true)}
+          className="relative p-2 rounded-xl hover:bg-gray-50 transition-colors group shrink-0"
+          title="意见反馈"
+        >
+          <MessageSquarePlus className="w-5 h-5 text-gray-500 group-hover:text-indigo-500 transition-colors" />
+        </button>
+
         {/* AI Assistant */}
         <button onClick={() => navigate('/profile')} className="relative p-2 rounded-xl hover:bg-gray-50 transition-colors group shrink-0">
           <MessageCircle className="w-5 h-5 text-gray-500 group-hover:text-indigo-500 transition-colors" />
@@ -50,6 +62,9 @@ export function Header() {
           {user?.avatar || '🦉'}
         </div>
       </div>
+
+      {/* 意见反馈弹窗 */}
+      <FeedbackModal open={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
     </header>
   )
 }
