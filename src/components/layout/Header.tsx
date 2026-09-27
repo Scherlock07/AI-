@@ -39,10 +39,11 @@ export function Header() {
         {/* Feedback */}
         <button
           onClick={() => setFeedbackOpen(true)}
-          className="relative p-2 rounded-xl hover:bg-gray-50 transition-colors group shrink-0"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-indigo-50 text-indigo-600 hover:bg-indigo-100 active:bg-indigo-100 transition-colors shrink-0"
           title="意见反馈"
         >
-          <MessageSquarePlus className="w-5 h-5 text-gray-500 group-hover:text-indigo-500 transition-colors" />
+          <MessageSquarePlus className="w-4 h-4" />
+          <span className="text-sm font-medium">反馈</span>
         </button>
 
         {/* AI Assistant */}

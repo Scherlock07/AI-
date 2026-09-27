@@ -5,6 +5,7 @@
  */
 
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { feedbackApi } from '@/api/client'
 import { useToast } from '@/contexts/ToastContext'
 import { useAuth } from '@/contexts/AuthContext'
@@ -65,7 +66,10 @@ export function FeedbackModal({ open, onClose }: { open: boolean; onClose: () =>
     onClose()
   }
 
-  return (
+  // 用 Portal 渲染到 document.body：
+  // 若渲染在 header（带 backdrop-blur）内，backdrop-filter 会把 fixed 元素的
+  // 定位基准从视口改为 header 本身，导致弹窗被压进顶栏、无法正常关闭
+  return createPortal(
     <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center">
       {/* 遮罩 */}
       <div className="absolute inset-0 bg-black/50 animate-fadeIn" onClick={handleClose} />
@@ -179,6 +183,7 @@ export function FeedbackModal({ open, onClose }: { open: boolean; onClose: () =>
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

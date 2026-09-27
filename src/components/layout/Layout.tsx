@@ -28,8 +28,13 @@ export function Layout() {
       <div className="relative hidden lg:block">
         <Sidebar />
       </div>
-      <div className="fixed inset-y-0 left-0 z-50 lg:hidden">
-        <Sidebar />
+      {/* 移动端抽屉：外层容器必须 pointer-events-none，否则侧边栏滑出后
+          这个透明 fixed 容器仍覆盖屏幕左侧 288px（z-50 高于 header 的 z-20），
+          会拦截汉堡菜单等左侧区域的点击 */}
+      <div className="fixed inset-y-0 left-0 z-50 lg:hidden pointer-events-none">
+        <div className="h-full pointer-events-auto">
+          <Sidebar />
+        </div>
       </div>
 
       <div className="flex-1 flex flex-col overflow-hidden">
