@@ -1,0 +1,54 @@
+# 阿里云生产部署 - 前后端一体化容器
+# 用法：
+#   1. 在本目录创建 .env 文件（参考下方 environment 注释）
+#   2. docker compose -f docker-compose.prod.yml up -d
+#   3. 更新版本：bash deploy.sh
+
+services:
+  app:
+    image: ghcr.io/scherlock07/ai:latest
+    container_name: ai-language-platform
+    ports:
+      - "80:8000"          # 直接用 80 端口，手机浏览器输入 IP 即可访问
+    volumes:
+      # SQLite 数据持久化：容器重建/升级后数据保留
+      - appdata:/data
+    environment:
+      # 数据库指向持久卷（覆盖容器内默认的临时路径）
+      - DATABASE_URL=sqlite:////data/ai_language_platform.db
+      # DeepSeek 大模型（必填）
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com/v1}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-chat}
+      # 语音服务（可选，未配置时自动降级浏览器 TTS）
+      - AZURE_SPEECH_KEY=${AZURE_SPEECH_KEY:-}
+      - AZURE_SPEECH_REGION=${AZURE_SPEECH_REGION:-eastasia}
+      # 允许的跨域来源（改成你的域名或留 IP）
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+    restart: unless-stopped
+    # 健康检查：接口不可用时自动重启
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/docs', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # 可选：自动跟随镜像更新（每次 push 到 GitHub 后自动拉新版本）
+  # 取消注释即启用
+  # watchtower:
+  #   image: containrrr/watchtower
+  #   container_name: watchtower
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #     - ~/.docker/config.json:/config.json:ro   # GHCR 私有镜像需要登录凭据
+  #   command: --interval 300 --cleanup
+  #   restart: unless-stopped
+
+volumes:
+  appdata:
