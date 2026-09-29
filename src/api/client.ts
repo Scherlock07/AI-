@@ -80,6 +80,8 @@ export const authApi = {
 export const listeningApi = {
   listMaterials: () => request('/api/listening/materials'),
 
+  deleteMaterial: (id: string) => request(`/api/listening/materials/${id}`, { method: 'DELETE' }),
+
   generate: (data: { topic: string; accent: string; speed: number; difficulty: string; duration: number }) =>
     request('/api/listening/generate', { method: 'POST', body: JSON.stringify(data) }),
 

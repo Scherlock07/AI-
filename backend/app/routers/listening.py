@@ -94,6 +94,20 @@ async def get_material(material_id: str, db: Session = Depends(get_db), user: Us
     return _to_response(material)
 
 
+@router.delete("/materials/{material_id}")
+async def delete_material(material_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """删除听力素材（创建者或教师可删除）"""
+    material = db.query(ListeningMaterial).filter(ListeningMaterial.id == material_id).first()
+    if not material:
+        raise HTTPException(404, "素材不存在")
+    if material.created_by != user.id and user.role != "teacher":
+        raise HTTPException(403, "只有创建者或教师可以删除该素材")
+    db.query(ListeningExercise).filter(ListeningExercise.material_id == material_id).delete()
+    db.delete(material)
+    db.commit()
+    return {"success": True, "message": "素材已删除"}
+
+
 def _to_response(m: ListeningMaterial) -> ListeningMaterialResponse:
     return ListeningMaterialResponse(
         id=m.id,

@@ -1,7 +1,7 @@
 """AI外语学习辅助平台 — FastAPI 后端入口"""
 
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -78,6 +78,14 @@ app.include_router(analytics.router)
 @app.get("/api/health", tags=["健康检查"])
 async def health():
     return {"status": "healthy"}
+
+
+# ========== 全局异常处理 ==========
+
+@app.exception_handler(RuntimeError)
+async def runtime_error_handler(request: Request, exc: RuntimeError):
+    """LLM 等服务层 RuntimeError → 503 + 中文友好提示（如额度用尽），避免生硬的 500"""
+    return JSONResponse({"detail": str(exc)}, status_code=503)
 
 
 # ========== 静态前端文件托管 ==========

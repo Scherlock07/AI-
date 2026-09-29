@@ -11,7 +11,7 @@ import { speak, stop, accentToLang } from '@/lib/tts'
 import {
   Headphones, Upload, Play, Pause, Volume2,
   Sparkles, FileAudio, BookMarked, Repeat, SkipBack, SkipForward,
-  Mic, PenLine, Waves,
+  Mic, PenLine, Waves, Trash2,
 } from 'lucide-react'
 
 type TabType = 'library' | 'generate' | 'practice' | 'vocab'
@@ -114,6 +114,17 @@ function LibraryView() {
     }
   }
 
+  const handleDelete = async (m: any) => {
+    if (!window.confirm(`确定删除素材「${m.title}」吗？相关练习记录也会一并删除，此操作不可恢复。`)) return
+    try {
+      await listeningApi.deleteMaterial(m.id)
+      setMaterials((prev) => prev.filter((x) => x.id !== m.id))
+      toast('素材已删除', 'success')
+    } catch (err: any) {
+      toast(err.message || '删除失败，请稍后重试', 'error')
+    }
+  }
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -209,17 +220,26 @@ function LibraryView() {
                     </span>
                     <span>{formatDuration(m.duration || 0)}</span>
                   </div>
-                  <Button
-                    size="sm"
-                    variant={playingId === m.id ? 'primary' : 'outline'}
-                    onClick={() => handlePlay(m)}
-                  >
-                    {playingId === m.id ? (
-                      <><Pause className="w-3 h-3" />暂停</>
-                    ) : (
-                      <><Play className="w-3 h-3" />播放</>
-                    )}
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant={playingId === m.id ? 'primary' : 'outline'}
+                      onClick={() => handlePlay(m)}
+                    >
+                      {playingId === m.id ? (
+                        <><Pause className="w-3 h-3" />暂停</>
+                      ) : (
+                        <><Play className="w-3 h-3" />播放</>
+                      )}
+                    </Button>
+                    <button
+                      onClick={() => handleDelete(m)}
+                      className="p-2 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                      title="删除素材"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -258,8 +278,10 @@ function GenerateView() {
     setGenerating(true)
     setError(null)
     try {
-      const res = await listeningApi.generate({ topic, accent, speed, difficulty, duration })
+      // 前端滑块单位是分钟，后端 duration 语义是秒，必须转换
+      const res = await listeningApi.generate({ topic, accent, speed, difficulty, duration: duration * 60 })
       setResult(res)
+      toast('生成成功，已存入素材库', 'success')
     } catch (err: any) {
       setError(err.message || '生成失败，请稍后重试')
     } finally {
