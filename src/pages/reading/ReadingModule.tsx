@@ -31,7 +31,7 @@ function extractQuestions(text: string): string[] {
 }
 
 export function ReadingModule() {
-  const [tab, setTab] = useState<TabType>('library')
+  const [tab, setTab] = useState<TabType>('import')
   const [analyzeContent, setAnalyzeContent] = useState('')
 
   const handleAnalyzeText = (content: string) => {
@@ -48,9 +48,9 @@ export function ReadingModule() {
 
       <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-xl w-fit">
         {[
-          { key: 'library' as TabType, label: '文本库', icon: BookOpen },
-          { key: 'analyze' as TabType, label: '阅读分析', icon: Brain },
-          { key: 'import' as TabType, label: '导入文本', icon: Upload },
+          { key: 'import' as TabType, label: '① 导入文本', icon: Upload },
+          { key: 'analyze' as TabType, label: '② 阅读分析', icon: Brain },
+          { key: 'library' as TabType, label: '③ 文本库', icon: BookOpen },
         ].map((t) => {
           const Icon = t.icon
           return (

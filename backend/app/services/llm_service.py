@@ -34,8 +34,19 @@ async def call_llm(messages: list[dict], temperature: float = 0.7, max_tokens: i
     }
 
     async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(f"{settings.LLM_BASE_URL}/chat/completions", json=payload, headers=headers)
-        resp.raise_for_status()
+        try:
+            resp = await client.post(f"{settings.LLM_BASE_URL}/chat/completions", json=payload, headers=headers)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 402:
+                raise RuntimeError("AI 服务额度已用尽，请联系管理员充值后重试") from e
+            if e.response.status_code == 401:
+                raise RuntimeError("AI 服务密钥无效，请联系管理员检查配置") from e
+            if e.response.status_code == 429:
+                raise RuntimeError("AI 服务请求过于频繁，请稍等几秒后重试") from e
+            raise RuntimeError(f"AI 服务暂时不可用（HTTP {e.response.status_code}），请稍后重试") from e
+        except httpx.RequestError as e:
+            raise RuntimeError("AI 服务网络连接失败，请稍后重试") from e
         data = resp.json()
         return data["choices"][0]["message"]["content"]
 
@@ -213,21 +224,32 @@ async def analyze_single_sentence(sentence: str, difficulty: str = "intermediate
     """AI 分析单个句子（语法结构、翻译、重点词汇）"""
     if not settings.LLM_API_KEY:
         return _mock_single_sentence(sentence)
-    system_msg = "你是一位英语语法和阅读教学专家，擅长分析长难句的句法结构并提供翻译。"
+    system_msg = (
+        "你是一位英语语法和阅读教学专家，擅长分析长难句的句法结构并提供翻译。"
+        "你对语法术语的区分极为严谨：状语从句必须有从属连词（when/although/because/if等）引导且内含完整主谓结构；"
+        "而非谓语结构（现在分词短语、过去分词短语、不定式短语、动名词短语）没有自己的主语和完整谓语。"
+        "绝对不能把非谓语结构误判为状语从句。"
+    )
 
     user_msg = f"""请分析以下英语句子（难度: {difficulty}）：
 
 {sentence}
 
+分析时的语法判定规则：
+1. 状语从句 = 从属连词(when/while/although/because/if/since/unless等) + 完整主谓结构
+2. 分词短语(现在分词/过去分词)、不定式(to do)、动名词短语属于【非谓语结构】，不是从句
+3. 判定前先检查引导词：有从属连词才是从句，仅是分词/不定式开头的是非谓语结构作状语/定语/补语
+4. 若句子是简单句（只有一个谓语动词），clauses 应为空数组，语法点中说明非谓语成分的作用
+
 请严格按 JSON 格式输出：
 {{
   "sentence": "{sentence}",
   "translation": "中文翻译",
-  "structure": "句子结构分析（主谓宾、从句类型等）",
+  "structure": "句子结构分析（主谓宾、从句类型、非谓语成分等）",
   "clauses": [
     {{
-      "type": "主句/定语从句/状语从句/名词性从句",
-      "text": "从句原文",
+      "type": "主句/定语从句/状语从句/名词性从句/非谓语结构",
+      "text": "从句或非谓语结构的原文",
       "function": "在句中的功能说明"
     }}
   ],
@@ -419,13 +441,15 @@ async def analyze_word_root(word: str) -> dict:
 # ========== 听力素材脚本生成 ==========
 
 async def generate_listening_script(topic: str, accent: str, speed: float, difficulty: str, duration: int) -> dict:
-    """AI 生成听力素材脚本"""
+    """AI 生成听力素材脚本（duration 单位：秒）"""
     if not settings.LLM_API_KEY:
         return _mock_listening_script(topic)
     system_msg = "你是一位英语听力教材编写专家，擅长设计各难度级别的听力素材。"
 
     minutes = duration // 60
     seconds = duration % 60
+    # 目标字数：正常语速约 140 词/分钟，语速倍率越高同样时长需要的词越多
+    target_words = max(40, int(duration / 60 * 140 * max(speed, 0.5)))
 
     user_msg = f"""请生成一段英语听力素材。
 
@@ -435,10 +459,15 @@ async def generate_listening_script(topic: str, accent: str, speed: float, diffi
 难度: {difficulty}
 目标时长: {minutes}分{seconds}秒
 
+【硬性要求】脚本长度必须约为 {target_words} 个英文单词（允许上下浮动15%）。
+目标时长完全由字数控制：{minutes}分{seconds}秒 ÷ {speed}x 语速 ≈ {target_words} 词。
+请先数好字数再输出，宁可多写不可少写。内容可以是独白（分多个自然段）或多人对话，
+确保内容充实、逻辑连贯，能撑满目标时长。
+
 请严格按 JSON 格式输出：
 {{
   "title": "素材标题",
-  "script": "完整的听力脚本文本（纯对话或独白）",
+  "script": "完整的听力脚本文本（纯对话或独白，约{target_words}词）",
   "vocabulary": [
     {{"word": "生词", "phonetic": "/fəˈnetɪk/", "definition": "中文释义", "example": "例句"}}
   ],
@@ -447,10 +476,22 @@ async def generate_listening_script(topic: str, accent: str, speed: float, diffi
 
 注意：脚本内容应自然流畅，符合{accent}口音的英语表达习惯。"""
 
-    return await call_llm_json([
+    result = await call_llm_json([
         {"role": "system", "content": system_msg},
         {"role": "user", "content": user_msg},
     ])
+
+    # 字数不足时自动重试一次（LLM 经常写得偏短）
+    script = str(result.get("script", ""))
+    actual_words = len(script.split())
+    if actual_words < target_words * 0.5:
+        retry_msg = user_msg + f"\n\n【再次强调】上次生成的脚本只有 {actual_words} 词，远低于要求的 {target_words} 词。这次必须写满 {target_words} 词左右，请扩展内容的深度和广度（增加论据、举例、对话轮次等）。"
+        result = await call_llm_json([
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": retry_msg},
+        ])
+
+    return result
 
 
 # ========== 讨论主题推荐 ==========
