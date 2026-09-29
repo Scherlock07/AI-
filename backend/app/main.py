@@ -22,6 +22,7 @@ from app.models.community import (
     Achievement, LearningStats, Feedback, UsageEvent,
 )
 from app.models.teacher import Class, ClassMember, Assignment, ClassroomSpeakingScore
+from app.models.llm_usage import LLMUsageLog
 
 # 导入路由
 from app.routers import auth, listening, speaking, reading, writing, vocabulary, translation, community, teacher, profile, feedback, analytics

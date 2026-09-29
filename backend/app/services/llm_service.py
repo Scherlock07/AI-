@@ -12,15 +12,69 @@
 """
 
 import json
+import inspect
 import httpx
 from typing import Any
 from app.config import settings
+
+# 单次 prompt 字符数硬上限（约 15K tokens）。
+# 平台所有业务接口正常情况下单次输入都不应超过这个量级，超过即为异常调用，直接拒绝。
+MAX_PROMPT_CHARS = 60_000
+
+
+def _caller_tag() -> str:
+    """向上找到调用 call_llm 的业务函数名（跳过 call_llm/call_llm_json 自身）"""
+    try:
+        for frame in inspect.stack()[1:6]:
+            name = frame.function
+            if name not in ("call_llm", "call_llm_json", "_caller_tag"):
+                return name
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _log_usage(tag: str, model: str, prompt_chars: int, usage: dict) -> None:
+    """记录本次 LLM 调用的 tokens 用量（日志 + SQLite），失败不影响业务"""
+    pt = usage.get("prompt_tokens", 0) or 0
+    ct = usage.get("completion_tokens", 0) or 0
+    hit = usage.get("prompt_cache_hit_tokens", 0) or 0
+    miss = usage.get("prompt_cache_miss_tokens", 0) or 0
+    print(
+        f"[LLM] {tag} | prompt {pt} tok (hit {hit} / miss {miss}) "
+        f"| completion {ct} tok | {prompt_chars} chars | model={model}"
+    )
+    try:
+        from app.models.llm_usage import LLMUsageLog
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            db.add(LLMUsageLog(
+                tag=tag, model=model, prompt_chars=prompt_chars,
+                prompt_tokens=pt, completion_tokens=ct,
+                cache_hit_tokens=hit, cache_miss_tokens=miss,
+            ))
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[LLM] usage log save failed: {e}")
 
 
 async def call_llm(messages: list[dict], temperature: float = 0.7, max_tokens: int = 4096) -> str:
     """调用 LLM (OpenAI 兼容接口)"""
     if not settings.LLM_API_KEY:
         raise RuntimeError("LLM_API_KEY not configured")
+
+    # 防超长 prompt：所有业务接口的正常输入远小于该上限
+    prompt_chars = sum(len(str(m.get("content", ""))) for m in messages)
+    if prompt_chars > MAX_PROMPT_CHARS:
+        raise RuntimeError(
+            f"AI 请求内容异常（{prompt_chars} 字符，超过 {MAX_PROMPT_CHARS} 上限），已拦截。"
+            "如需处理长文本请分段提交。"
+        )
+
+    tag = _caller_tag()
 
     headers = {
         "Authorization": f"Bearer {settings.LLM_API_KEY}",
@@ -48,6 +102,7 @@ async def call_llm(messages: list[dict], temperature: float = 0.7, max_tokens: i
         except httpx.RequestError as e:
             raise RuntimeError("AI 服务网络连接失败，请稍后重试") from e
         data = resp.json()
+        _log_usage(tag, str(settings.LLM_MODEL), prompt_chars, data.get("usage", {}))
         return data["choices"][0]["message"]["content"]
 
 

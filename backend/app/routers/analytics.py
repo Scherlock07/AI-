@@ -141,3 +141,65 @@ async def analytics_summary(
         "avg_durations": avg_durations,
         "by_device": by_device,
     }
+
+
+@router.get("/llm-usage", response_model=dict)
+async def llm_usage_summary(
+    days: int = 7,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """LLM 调用用量汇总（仅教师）：按业务接口统计次数与 tokens 消耗"""
+    if user.role != "teacher":
+        raise HTTPException(403, "仅教师可查看 AI 用量")
+
+    from app.models.llm_usage import LLMUsageLog
+
+    days = max(1, min(days, 90))
+    since = datetime.utcnow() - timedelta(days=days)
+
+    rows = (
+        db.query(
+            LLMUsageLog.tag,
+            func.count(LLMUsageLog.id),
+            func.sum(LLMUsageLog.prompt_tokens),
+            func.sum(LLMUsageLog.completion_tokens),
+            func.sum(LLMUsageLog.cache_hit_tokens),
+            func.sum(LLMUsageLog.cache_miss_tokens),
+        )
+        .filter(LLMUsageLog.created_at >= since)
+        .group_by(LLMUsageLog.tag)
+        .order_by(func.sum(LLMUsageLog.prompt_tokens).desc())
+        .all()
+    )
+
+    by_tag = [
+        {
+            "tag": t or "unknown",
+            "calls": n,
+            "prompt_tokens": p or 0,
+            "completion_tokens": c or 0,
+            "cache_hit_tokens": h or 0,
+            "cache_miss_tokens": m or 0,
+        }
+        for t, n, p, c, h, m in rows
+    ]
+
+    # 按天汇总（观察趋势）
+    daily_rows = (
+        db.query(
+            func.date(LLMUsageLog.created_at),
+            func.count(LLMUsageLog.id),
+            func.sum(LLMUsageLog.prompt_tokens),
+            func.sum(LLMUsageLog.completion_tokens),
+        )
+        .filter(LLMUsageLog.created_at >= since)
+        .group_by(func.date(LLMUsageLog.created_at))
+        .all()
+    )
+    daily = [
+        {"date": str(d), "calls": n, "prompt_tokens": p or 0, "completion_tokens": c or 0}
+        for d, n, p, c in daily_rows
+    ]
+
+    return {"days": days, "by_tag": by_tag, "daily": daily}

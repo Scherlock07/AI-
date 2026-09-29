@@ -1583,8 +1583,8 @@ function ConversationView() {
     setAiReplying(true)
 
     try {
-      // 构建对话上下文
-      const conversationContext = messages.map(m => `${m.role === 'ai' ? 'AI' : 'Student'}: ${m.text}`).join('\n')
+      // 构建对话上下文（只保留最近10条，防止无限累积导致单次请求过大）
+      const conversationContext = messages.slice(-10).map(m => `${m.role === 'ai' ? 'AI' : 'Student'}: ${m.text}`).join('\n')
       const modeLabel = mode === 'daily' ? 'casual daily conversation' : 'critical thinking discussion'
       const prompt = `You are an English conversation partner. Continue this ${modeLabel} naturally. The student just said: "${currentInput}". Previous context:\n${conversationContext}\n\nRespond naturally in English (2-3 sentences). Ask follow-up questions to keep the conversation going. Match the difficulty level of the student's English.`
 
