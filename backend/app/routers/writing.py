@@ -52,12 +52,36 @@ async def submit_writing(req: WritingSubmitRequest, db: Session = Depends(get_db
 
 
 @router.post("/grade", response_model=WritingGradeResult)
-async def grade_only(req: WritingGradeRequest, user: User = Depends(get_current_user)):
-    """仅评分不保存（快速预览）"""
+async def grade_only(req: WritingGradeRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """AI 批改并保存记录（历史记录页可见）"""
     try:
         result = await grade_writing(req.content, req.type, req.prompt, req.title)
     except Exception as e:
         raise HTTPException(500, f"AI 批改失败: {str(e)}")
+
+    # 保存批改记录（历史记录页依赖 /submissions 数据）
+    try:
+        submission = WritingSubmission(
+            user_id=user.id,
+            title=req.title or "Untitled",
+            type=req.type,
+            prompt=req.prompt,
+            content=req.content,
+            word_count=len(req.content.split()),
+            status="completed",
+        )
+        submission.scores = json.dumps(result.get("scores", []), ensure_ascii=False)
+        submission.overall_score = result.get("overall_score", 0)
+        submission.ai_feedback = result.get("ai_feedback", "")
+        submission.revised_version = result.get("revised_version", "")
+        submission.error_details = json.dumps(result.get("error_details", []), ensure_ascii=False)
+        submission.completed_at = datetime.utcnow()
+        db.add(submission)
+        user.total_points += result.get("overall_score", 0)
+        db.commit()
+    except Exception:
+        db.rollback()  # 保存失败不影响批改结果返回
+
     try:
         return WritingGradeResult(**result)
     except Exception as e:

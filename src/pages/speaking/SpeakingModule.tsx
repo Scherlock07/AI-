@@ -1574,35 +1574,68 @@ function ConversationView() {
     })
   }
 
-  const sendMessage = async () => {
-    if (!input.trim() || aiReplying) return
-    const userMsg = { role: 'user', text: input, time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }) }
-    const currentInput = input
+  const sendMessage = async (presetText?: string) => {
+    const textToSend = presetText ?? input
+    if (!textToSend.trim() || aiReplying) return
+    const userMsg = { role: 'user', text: textToSend, time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }) }
+    const currentInput = textToSend
+    if (!presetText) setInput('')
     setMessages(prev => [...prev, userMsg])
-    setInput('')
     setAiReplying(true)
 
     try {
       // 构建对话上下文（只保留最近10条，防止无限累积导致单次请求过大）
-      const conversationContext = messages.slice(-10).map(m => `${m.role === 'ai' ? 'AI' : 'Student'}: ${m.text}`).join('\n')
+      const recent = messages.slice(-10)
+      const conversationContext = recent.map(m => `${m.role === 'ai' ? 'AI' : 'Student'}: ${m.text}`).join('\n')
+      const previousQuestions = recent
+        .filter(m => m.role === 'ai')
+        .map(m => m.text.replace(/\n/g, ' '))
+        .join('\n- ')
       const modeLabel = mode === 'daily' ? 'casual daily conversation' : 'critical thinking discussion'
-      const prompt = `You are an English conversation partner. Continue this ${modeLabel} naturally. The student just said: "${currentInput}". Previous context:\n${conversationContext}\n\nRespond naturally in English (2-3 sentences). Ask follow-up questions to keep the conversation going. Match the difficulty level of the student's English.`
+      const prompt = `You are a friendly, perceptive English conversation partner on a language learning platform. Continue this ${modeLabel} naturally.
+
+Conversation so far:
+${conversationContext}
+
+The student just said: "${currentInput}"
+
+Rules (VERY IMPORTANT):
+1. Read the student's ENTIRE message carefully. Pick out 1-2 SPECIFIC points they actually mentioned (a detail, example, opinion, or feeling) and respond to THAT — briefly react to it, then ask a follow-up question about that specific point.
+2. NEVER reply with only a generic question like "Could you elaborate?" or "Can you tell me more?" — that feels robotic.
+3. NEVER ask a question you (AI) have already asked before. Your previous questions, do NOT repeat or paraphrase them:
+- ${previousQuestions || '(none yet)'}
+4. Sometimes share your own related thought or experience (1 sentence) before asking, so it feels like a real exchange.
+5. Respond in English, 2-3 sentences, natural conversational tone matching the student's level.`
 
       const res = await profileApi.askAssistant(prompt, 'conversation-continue')
       setMessages(prev => [...prev, {
         role: 'ai',
-        text: res.reply || "That's interesting. Can you tell me more about that?",
+        text: res.reply || "That's an interesting point — could you say a bit more about how you came to that view?",
         time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
       }])
-    } catch {
+    } catch (err: any) {
+      // 失败绝不伪装成 AI 回复（旧版这里会输出写死的"Could you elaborate"，导致复读机效果）
+      const errMsg = err?.message || 'AI 回复失败，请稍后重试'
       setMessages(prev => [...prev, {
-        role: 'ai',
-        text: "I see. Could you elaborate on that a bit more?",
+        role: 'error',
+        text: errMsg,
+        retryText: currentInput,
         time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
       }])
+      toast(errMsg, 'error')
     } finally {
       setAiReplying(false)
     }
+  }
+
+  const retrySend = (retryText: string) => {
+    // 移除最后一条错误消息，用原文重试
+    setMessages(prev => {
+      const copy = [...prev]
+      if (copy.length && copy[copy.length - 1].role === 'error') copy.pop()
+      return copy
+    })
+    setTimeout(() => sendMessage(retryText), 50)
   }
 
   const finishConversation = async () => {
@@ -1705,7 +1738,7 @@ function ConversationView() {
                     disabled={aiReplying}
                     className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400 disabled:bg-gray-50"
                   />
-                  <Button size="sm" onClick={sendMessage} disabled={!input.trim() || aiReplying}>
+                  <Button size="sm" onClick={() => sendMessage()} disabled={!input.trim() || aiReplying}>
                     {aiReplying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                   </Button>
                 </div>
@@ -1750,12 +1783,24 @@ function ConversationView() {
                       {msg.role === 'ai' ? <Bot className="w-4 h-4 text-purple-600" /> : <span className="text-xs font-medium text-indigo-600">我</span>}
                     </div>
                     <div className={cn('max-w-[75%]')}>
-                      <div className={cn(
-                        'p-2.5 rounded-lg text-sm leading-relaxed',
-                        msg.role === 'user' ? 'bg-indigo-500 text-white' : 'bg-gray-50 text-gray-700'
-                      )}>
-                        {msg.text}
-                      </div>
+                      {msg.role === 'error' ? (
+                        <div className="p-2.5 rounded-lg text-sm leading-relaxed bg-red-50 border border-red-100 text-red-600">
+                          <span>{msg.text}</span>
+                          <button
+                            onClick={() => retrySend(msg.retryText)}
+                            className="ml-2 px-2 py-0.5 text-xs bg-red-100 hover:bg-red-200 rounded transition-colors"
+                          >
+                            重试
+                          </button>
+                        </div>
+                      ) : (
+                        <div className={cn(
+                          'p-2.5 rounded-lg text-sm leading-relaxed',
+                          msg.role === 'user' ? 'bg-indigo-500 text-white' : 'bg-gray-50 text-gray-700'
+                        )}>
+                          {msg.text}
+                        </div>
+                      )}
                       <div className="text-xs text-gray-300 mt-0.5">{msg.time}</div>
                     </div>
                   </div>

@@ -52,6 +52,7 @@ class WritingGradeResult(BaseModel):
     ai_feedback: str = ""
     revised_version: str = ""
     error_details: list[dict] = []
+    topic_vocabulary: list[dict] = []
 
     @field_validator("overall_score", mode="before")
     @classmethod

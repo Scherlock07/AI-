@@ -11,7 +11,7 @@ import { trackFeatureUse } from '@/lib/tracker'
 import {
   PenLine, Upload, Camera, FileText, Sparkles, TrendingUp,
   CheckCircle2, Lightbulb, ArrowRight, Star, BookOpen,
-  BarChart3, MessageSquare, Palette, BookMarked, ArrowLeft, Clock,
+  BarChart3, MessageSquare, Palette, BookMarked, ArrowLeft, Clock, Maximize2, X,
 } from 'lucide-react'
 
 type TabType = 'grading' | 'daily' | 'history'
@@ -66,6 +66,7 @@ function GradingView() {
   const [result, setResult] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [showFullRevised, setShowFullRevised] = useState(false)
 
   const handleGrade = async () => {
     setLoading(true)
@@ -287,19 +288,41 @@ function GradingView() {
               </Card>
             )}
 
+            {result.topic_vocabulary && result.topic_vocabulary.length > 0 && (
+              <TopicVocabularyPanel vocabulary={result.topic_vocabulary} />
+            )}
+
             {result.revised_version && (
               <Card>
                 <CardHeader>
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-purple-500" />
-                    <CardTitle>AI润色版本</CardTitle>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-5 h-5 text-purple-500" />
+                      <CardTitle>AI润色版本</CardTitle>
+                    </div>
+                    <button
+                      onClick={() => setShowFullRevised(true)}
+                      className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                      title="全屏居中查看"
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                      全屏查看
+                    </button>
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{result.revised_version}</p>
+                  <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap line-clamp-[12]">{result.revised_version}</p>
+                  <p className="text-xs text-gray-400 mt-2">内容较长？点击右上角"全屏查看"阅读完整润色版</p>
                 </CardContent>
               </Card>
             )}
+
+            <FullscreenTextModal
+              open={showFullRevised}
+              title="AI 润色版本（全屏）"
+              text={result.revised_version || ''}
+              onClose={() => setShowFullRevised(false)}
+            />
           </>
         ) : loading ? (
           <Card className="h-full flex items-center justify-center min-h-[400px]">
@@ -319,6 +342,66 @@ function GradingView() {
             </div>
           </Card>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ===== 批改结果共享组件 =====
+
+/** 拓展词汇板块：针对文章主题的高级词汇建议 */
+function TopicVocabularyPanel({ vocabulary }: { vocabulary: any[] }) {
+  if (!vocabulary || vocabulary.length === 0) return null
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <BookMarked className="w-5 h-5 text-emerald-500" />
+          <CardTitle>拓展词汇 · 本主题进阶表达</CardTitle>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <p className="text-xs text-gray-400 mb-3">这些是你本文未用到、但该主题下地道写作者常用的表达</p>
+        <div className="space-y-2">
+          {vocabulary.map((v: any, i: number) => (
+            <div key={i} className="p-3 bg-emerald-50/60 rounded-lg">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-semibold text-emerald-700">{v.term}</span>
+                {v.definition && <span className="text-xs text-gray-500">{v.definition}</span>}
+              </div>
+              {v.example && <p className="text-xs text-gray-400 mt-1 italic">e.g. {v.example}</p>}
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+/** 全屏居中文本查看弹窗（润色版/长反馈用） */
+function FullscreenTextModal({ open, title, text, onClose }: { open: boolean; title: string; text: string; onClose: () => void }) {
+  if (!open) return null
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 sm:p-8"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <h3 className="text-base font-semibold text-gray-800">{title}</h3>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="px-6 py-5 overflow-y-auto">
+          <p className="text-sm text-gray-700 leading-7 whitespace-pre-wrap">{text}</p>
+        </div>
       </div>
     </div>
   )
@@ -625,6 +708,9 @@ function DailyPracticeView() {
               </div>
             </CardContent>
           </Card>
+        )}
+        {result.topic_vocabulary && result.topic_vocabulary.length > 0 && (
+          <TopicVocabularyPanel vocabulary={result.topic_vocabulary} />
         )}
         {result.revised_version && (
           <Card>

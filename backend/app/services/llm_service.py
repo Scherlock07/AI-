@@ -163,10 +163,17 @@ async def grade_writing(content: str, writing_type: str, prompt: str, title: str
 5. Content Depth (内容深度)
 6. Organization (组织结构)
 
+【反馈质量硬性要求】每个维度的 feedback 禁止空泛套话（如"内容深度不足，建议深化论述"）。
+必须做到：①引用学生原文的具体位置（第几段/哪个论点）；②指出具体缺什么（论据？反例？数据？因果链？）；
+③给出可直接操作的改法，例如"第二段的论点X缺少支撑，可以补充一个Y方面的例子，写成…"。
+
 同时提供：
 - overall_feedback: 总体评价
-- revised_version: 润色后的完整作文
+- revised_version: 润色后的完整作文（【重要】不能只改语言错误，必须实质性提升内容深度：
+  补充论证、例子、因果分析或细节，让润色版与原文形成"语言+深度"的对比示范）
 - error_details: 逐句错误标注数组 [{{original, corrected, error_type, explanation}}]
+- topic_vocabulary: 针对本文主题的拓展词汇板块，8-12个高级词汇/短语
+  （学生作文中未使用、但该主题下地道写作者会用的），每项含词汇、中文释义、用法示例
 
 请严格按以下 JSON 格式输出：
 {{
@@ -183,6 +190,9 @@ async def grade_writing(content: str, writing_type: str, prompt: str, title: str
   "revised_version": "润色后的完整作文...",
   "error_details": [
     {{"original": "原句", "corrected": "修改后", "error_type": "grammar", "explanation": "错误说明"}}
+  ],
+  "topic_vocabulary": [
+    {{"term": "词汇或短语", "definition": "中文释义", "example": "地道用法示例句"}}
   ]
 }}"""
 
@@ -662,17 +672,21 @@ Now it's your turn to speak, {ai_name}. Please provide your response:"""
 # ========== AI 助教对话 ==========
 
 async def chat_with_ai_assistant(user_message: str, context: str = "") -> str:
-    """AI 助教对话"""
+    """AI 助教对话（语言自适应：英文对话场景用英文回，中文提问用中文回）"""
     if not settings.LLM_API_KEY:
         return f"[Mock模式] 收到你的问题：「{user_message[:100]}」。配置 LLM API Key 后，AI助教将提供专业的英语学习解答。"
     messages = [
-        {"role": "system", "content": "你是AI外语学习助教，可以回答英语学习问题、提供学习建议、解释语法点、纠正写作等。请用中文回答，必要时给出英语示例。"},
+        {"role": "system", "content": (
+            "你是AI外语学习助教，可以回答英语学习问题、提供学习建议、解释语法点、纠正写作等。"
+            "语言规则：请用与用户消息相同的语言回答（用户用英文就用英文答，用中文就用中文答），"
+            "英文场景回答必须是地道自然的英文。"
+        )},
     ]
     if context:
         messages.append({"role": "system", "content": f"对话上下文: {context}"})
     messages.append({"role": "user", "content": user_message})
 
-    return await call_llm(messages, temperature=0.7)
+    return await call_llm(messages, temperature=0.8)
 
 
 # ========== 学习路径推荐 ==========

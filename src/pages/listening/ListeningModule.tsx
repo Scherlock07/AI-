@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/Button'
 import { Progress } from '@/components/ui/Progress'
 import { Skeleton, ErrorState, EmptyState, LoadingSpinner } from '@/components/ui/Loading'
 import { cn, formatDuration, getDifficultyLabel, getDifficultyColor } from '@/lib/utils'
-import { speak, stop, accentToLang } from '@/lib/tts'
+import { speak, stop, accentToLang, speakDialogue, stripSpeakerLabels } from '@/lib/tts'
 import {
   Headphones, Upload, Play, Pause, Volume2,
   Sparkles, FileAudio, BookMarked, Repeat, SkipBack, SkipForward,
@@ -98,10 +98,10 @@ function LibraryView() {
     }
     const lang = accentToLang(m.accent || 'us')
     const speed = m.speed || 1.0
-    const ok = speak({
+    const ok = speakDialogue({
       text: transcript,
       lang,
-      rate: speed,
+      rate: speed * 0.92, // 听力播放统一降 8%，句间自动停顿
       onStart: () => setPlayingId(m.id),
       onEnd: () => setPlayingId(null),
       onError: (err) => {
@@ -300,10 +300,10 @@ function GenerateView() {
       toast('没有可播放的文本', 'warning')
       return
     }
-    speak({
+    speakDialogue({
       text: transcript,
       lang: accentToLang(accent),
-      rate: speed,
+      rate: speed * 0.92, // 听力播放统一降 8%
       onStart: () => setIsPlaying(true),
       onEnd: () => setIsPlaying(false),
       onError: (err) => {
@@ -517,7 +517,8 @@ function GenerateView() {
 type PracticeMode = 'intensive' | 'fillblank' | 'dictation' | 'keypoints'
 
 function splitSentences(transcript: string): string[] {
-  return transcript
+  // 先剥离说话人称谓（Host: / Dr. Chen: 等），避免 TTS 把称谓读出来
+  return stripSpeakerLabels(transcript)
     .split(/(?<=[.!?])\s+/)
     .map(s => s.trim())
     .filter(s => s.length > 0)
