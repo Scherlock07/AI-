@@ -53,6 +53,8 @@ class WritingGradeResult(BaseModel):
     revised_version: str = ""
     error_details: list[dict] = []
     topic_vocabulary: list[dict] = []
+    # 润色范文与拓展词汇是否还需按需生成
+    enhance_pending: bool = False
 
     @field_validator("overall_score", mode="before")
     @classmethod
@@ -60,3 +62,10 @@ class WritingGradeResult(BaseModel):
         if isinstance(v, float):
             return int(v)
         return v
+
+
+class WritingEnhanceRequest(BaseModel):
+    content: str
+    type: str = "argumentative"
+    prompt: str = ""
+    weak_dimensions: list[str] = []

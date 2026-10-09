@@ -154,9 +154,13 @@ async def llm_usage_summary(
         raise HTTPException(403, "仅教师可查看 AI 用量")
 
     from app.models.llm_usage import LLMUsageLog
+    from app.models.llm_cache import LLMResultCache
 
     days = max(1, min(days, 90))
     since = datetime.utcnow() - timedelta(days=days)
+
+    # 失败调用（model 以 ERROR: 开头）单独统计，不混入正常消耗
+    not_failed = ~LLMUsageLog.model.like("ERROR:%")
 
     rows = (
         db.query(
@@ -167,9 +171,9 @@ async def llm_usage_summary(
             func.sum(LLMUsageLog.cache_hit_tokens),
             func.sum(LLMUsageLog.cache_miss_tokens),
         )
-        .filter(LLMUsageLog.created_at >= since)
+        .filter(LLMUsageLog.created_at >= since, not_failed)
         .group_by(LLMUsageLog.tag)
-        .order_by(func.sum(LLMUsageLog.prompt_tokens).desc())
+        .order_by(func.sum(LLMUsageLog.prompt_tokens + LLMUsageLog.completion_tokens).desc())
         .all()
     )
 
@@ -181,6 +185,7 @@ async def llm_usage_summary(
             "completion_tokens": c or 0,
             "cache_hit_tokens": h or 0,
             "cache_miss_tokens": m or 0,
+            "total_tokens": (p or 0) + (c or 0),
         }
         for t, n, p, c, h, m in rows
     ]
@@ -193,7 +198,7 @@ async def llm_usage_summary(
             func.sum(LLMUsageLog.prompt_tokens),
             func.sum(LLMUsageLog.completion_tokens),
         )
-        .filter(LLMUsageLog.created_at >= since)
+        .filter(LLMUsageLog.created_at >= since, not_failed)
         .group_by(func.date(LLMUsageLog.created_at))
         .all()
     )
@@ -202,4 +207,49 @@ async def llm_usage_summary(
         for d, n, p, c in daily_rows
     ]
 
-    return {"days": days, "by_tag": by_tag, "daily": daily}
+    # 失败调用明细（预算用尽 / 402 / 401 / 网络错误）
+    fail_rows = (
+        db.query(LLMUsageLog.tag, LLMUsageLog.model, func.count(LLMUsageLog.id))
+        .filter(LLMUsageLog.created_at >= since, LLMUsageLog.model.like("ERROR:%"))
+        .group_by(LLMUsageLog.tag, LLMUsageLog.model)
+        .all()
+    )
+    failures = [{"tag": t, "reason": (m or "").replace("ERROR:", ""), "count": n} for t, m, n in fail_rows]
+
+    # 缓存复用情况（省下的调用次数与 tokens）
+    cache_rows = (
+        db.query(
+            LLMResultCache.tag,
+            func.count(LLMResultCache.cache_key),
+            func.sum(LLMResultCache.hits),
+            func.sum(LLMResultCache.saved_tokens),
+        )
+        .group_by(LLMResultCache.tag)
+        .all()
+    )
+    cache_by_tag = [
+        {"tag": t, "entries": e, "hits": h or 0, "saved_tokens": s or 0}
+        for t, e, h, s in cache_rows
+    ]
+    cache_total = {
+        "entries": sum(c["entries"] for c in cache_by_tag),
+        "hits": sum(c["hits"] for c in cache_by_tag),
+        "saved_tokens": sum(c["saved_tokens"] for c in cache_by_tag),
+    }
+
+    # 预算状态（当日）
+    try:
+        from app.services.llm_service import budget_status
+        budget = budget_status()
+    except Exception:
+        budget = {}
+
+    return {
+        "days": days,
+        "by_tag": by_tag,
+        "daily": daily,
+        "failures": failures,
+        "cache_by_tag": cache_by_tag,
+        "cache_total": cache_total,
+        "budget": budget,
+    }

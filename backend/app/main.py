@@ -23,6 +23,7 @@ from app.models.community import (
 )
 from app.models.teacher import Class, ClassMember, Assignment, ClassroomSpeakingScore
 from app.models.llm_usage import LLMUsageLog
+from app.models.llm_cache import LLMResultCache  # noqa: F401  注册结果缓存表
 
 # 导入路由
 from app.routers import auth, listening, speaking, reading, writing, vocabulary, translation, community, teacher, profile, feedback, analytics
@@ -41,6 +42,14 @@ async def lifespan(app: FastAPI):
     print(f"  Database: {settings.DATABASE_URL}")
     print(f"  LLM Model: {settings.LLM_MODEL}")
     print(f"  Azure Speech: {'configured' if settings.AZURE_SPEECH_KEY else 'NOT configured (mock mode)'}")
+    print(f"  LLM Cache: {'enabled' if settings.LLM_CACHE_ENABLED else 'disabled'} | "
+          f"Daily budget: {settings.DAILY_TOKEN_BUDGET} tok")
+    try:
+        from app.services.llm_service import budget_status
+        bs = budget_status()
+        print(f"  Budget used today: {bs['used_today']} tok ({bs['percent']}%)")
+    except Exception:
+        pass
     print(f"{'='*50}\n")
     yield
 

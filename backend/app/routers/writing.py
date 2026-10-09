@@ -8,8 +8,11 @@ from app.database import get_db
 from app.models.user import User
 from app.models.writing import WritingSubmission, WritingPeerReview
 from app.auth.security import get_current_user
-from app.schemas.writing import WritingSubmitRequest, WritingGradeRequest, WritingResponse, WritingGradeResult
-from app.services.llm_service import grade_writing
+from app.schemas.writing import (
+    WritingSubmitRequest, WritingGradeRequest, WritingResponse, WritingGradeResult,
+    WritingEnhanceRequest,
+)
+from app.services.llm_service import grade_writing, generate_writing_enhancement
 from app.services.ocr_service import recognize_handwriting
 
 router = APIRouter(prefix="/api/writing", tags=["写作模块"])
@@ -86,6 +89,38 @@ async def grade_only(req: WritingGradeRequest, db: Session = Depends(get_db), us
         return WritingGradeResult(**result)
     except Exception as e:
         raise HTTPException(500, f"结果格式化失败: {str(e)[:500]}\n原始数据keys: {list(result.keys()) if isinstance(result, dict) else type(result)}")
+
+
+@router.post("/enhance", response_model=dict)
+async def enhance_writing(req: WritingEnhanceRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """按需生成"润色范文 + 拓展词汇"
+
+    与 /grade 拆开的原因：这两项输出占写作批改 60% 以上的 token，
+    但学生并非每次都需要。改为点击时生成，相同作文复用缓存，不会重复计费。
+    """
+    try:
+        result = await generate_writing_enhancement(req.content, req.type, req.prompt, req.weak_dimensions)
+    except Exception as e:
+        raise HTTPException(500, f"生成失败: {str(e)}")
+
+    # 回填到最近的同内容批改记录，历史记录页也能看到润色版
+    try:
+        sub = (
+            db.query(WritingSubmission)
+            .filter(WritingSubmission.user_id == user.id, WritingSubmission.content == req.content)
+            .order_by(WritingSubmission.submitted_at.desc())
+            .first()
+        )
+        if sub:
+            sub.revised_version = result.get("revised_version", "")
+            db.commit()
+    except Exception:
+        db.rollback()
+
+    return {
+        "revised_version": result.get("revised_version", ""),
+        "topic_vocabulary": result.get("topic_vocabulary", []),
+    }
 
 
 @router.post("/ocr", response_model=dict)

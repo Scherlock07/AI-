@@ -204,6 +204,10 @@ export const writingApi = {
   grade: (data: { content: string; type: string; prompt: string; title?: string }) =>
     request('/api/writing/grade', { method: 'POST', body: JSON.stringify(data) }),
 
+  // 按需生成润色范文与拓展词汇（写作批改的第二段，避免每次批改都全额消耗 token）
+  enhance: (data: { content: string; type: string; prompt: string; weak_dimensions?: string[] }) =>
+    request('/api/writing/enhance', { method: 'POST', body: JSON.stringify(data) }),
+
   ocr: (image_base64: string) =>
     request('/api/writing/ocr', { method: 'POST', body: JSON.stringify({ image_base64 }) }),
 

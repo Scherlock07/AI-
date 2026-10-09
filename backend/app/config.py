@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = "https://api.openai.com/v1"
     LLM_MODEL: str = "gpt-4o-mini"
 
+    # ===== 成本控制 =====
+    # 结果缓存：相同请求直接复用历史结果，不重复调用大模型
+    LLM_CACHE_ENABLED: bool = True
+    # 每日 token 预算：超出后高消耗功能自动降级为示例模式（功能不断，仅结果为示例数据）
+    DAILY_TOKEN_BUDGET: int = 2000000
+    # 写作批改懒加载：主批改先返回评分/纠错，润色版与拓展词汇改为按需生成
+    WRITING_LAZY_ENHANCE: bool = True
+    # 听力脚本参数缓存：相同主题+口音+语速+难度+时长直接复用已有素材
+    LISTENING_REUSE_ENABLED: bool = True
+
     # Azure Speech
     AZURE_SPEECH_KEY: str = ""
     AZURE_SPEECH_REGION: str = "eastasia"

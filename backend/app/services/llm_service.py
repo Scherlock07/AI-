@@ -14,20 +14,38 @@
 import json
 import inspect
 import httpx
+from datetime import datetime
 from typing import Any
 from app.config import settings
+from app.services.llm_cache import cached_json
 
 # 单次 prompt 字符数硬上限（约 15K tokens）。
 # 平台所有业务接口正常情况下单次输入都不应超过这个量级，超过即为异常调用，直接拒绝。
 MAX_PROMPT_CHARS = 60_000
 
 
+# 调用链上的包装层函数名，向上追溯业务函数时需要跳过
+_WRAPPER_FRAMES = {
+    "call_llm", "call_llm_json", "_caller_tag", "safe_json_call",
+    "cached_json", "<lambda>", "_generate_listening",
+}
+
+
 def _caller_tag() -> str:
-    """向上找到调用 call_llm 的业务函数名（跳过 call_llm/call_llm_json 自身）"""
+    """向上找到真正调用大模型的业务函数名（跳过缓存/降级等包装层）
+
+    用 f_back 逐层回溯而不是 inspect.stack()，避免每次调用都构建完整调用栈。
+    """
     try:
-        for frame in inspect.stack()[1:6]:
-            name = frame.function
-            if name not in ("call_llm", "call_llm_json", "_caller_tag"):
+        frame = inspect.currentframe()
+        for _ in range(12):
+            if frame is None:
+                break
+            frame = frame.f_back
+            if frame is None:
+                break
+            name = frame.f_code.co_name
+            if name not in _WRAPPER_FRAMES:
                 return name
     except Exception:
         pass
@@ -61,6 +79,70 @@ def _log_usage(tag: str, model: str, prompt_chars: int, usage: dict) -> None:
         print(f"[LLM] usage log save failed: {e}")
 
 
+def _log_failure(tag: str, reason: str) -> None:
+    """记录失败的 LLM 调用（tokens 记 0，model 记为 ERROR:原因）
+
+    之前失败的调用不会落库，导致"额度耗尽 / key 失效"这类问题在用量表里完全不可见。
+    现在失败同样入库，便于排查与成本归因。
+    """
+    try:
+        from app.models.llm_usage import LLMUsageLog
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            db.add(LLMUsageLog(
+                tag=tag, model=f"ERROR:{reason[:40]}", prompt_chars=0,
+                prompt_tokens=0, completion_tokens=0,
+                cache_hit_tokens=0, cache_miss_tokens=0,
+            ))
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[LLM] failure log save failed: {e}")
+
+
+class LLMBudgetExceeded(RuntimeError):
+    """当日 token 预算已用尽（用于触发功能降级，而非直接报错）"""
+
+
+def _daily_used_tokens() -> int:
+    """当日已消耗的 tokens（含输入+输出）"""
+    try:
+        from app.database import SessionLocal
+        from sqlalchemy import text
+        db = SessionLocal()
+        try:
+            row = db.execute(text(
+                "SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0) FROM llm_usage_logs "
+                "WHERE created_at >= :start"
+            ), {"start": datetime.utcnow().strftime("%Y-%m-%d 00:00:00")}).fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[LLM] budget query failed: {e}")
+        return 0
+
+
+def budget_status() -> dict:
+    """当前预算使用情况（供运维接口/前端提示使用）"""
+    used = _daily_used_tokens()
+    budget = settings.DAILY_TOKEN_BUDGET
+    return {
+        "used_today": used,
+        "daily_budget": budget,
+        "remaining": max(0, budget - used),
+        "percent": round(used / budget * 100, 1) if budget > 0 else 0,
+    }
+
+
+def _budget_ok() -> bool:
+    if settings.DAILY_TOKEN_BUDGET <= 0:  # <=0 表示不限
+        return True
+    return _daily_used_tokens() < settings.DAILY_TOKEN_BUDGET
+
+
 async def call_llm(messages: list[dict], temperature: float = 0.7, max_tokens: int = 4096) -> str:
     """调用 LLM (OpenAI 兼容接口)"""
     if not settings.LLM_API_KEY:
@@ -75,6 +157,11 @@ async def call_llm(messages: list[dict], temperature: float = 0.7, max_tokens: i
         )
 
     tag = _caller_tag()
+
+    # 预算护栏：超出当日预算时抛出专用异常，由业务层降级为示例结果（功能不中断）
+    if not _budget_ok():
+        _log_failure(tag, "budget_exceeded")
+        raise LLMBudgetExceeded("今日 AI 用量已达预算上限，已切换为示例模式")
 
     headers = {
         "Authorization": f"Bearer {settings.LLM_API_KEY}",
@@ -92,23 +179,44 @@ async def call_llm(messages: list[dict], temperature: float = 0.7, max_tokens: i
             resp = await client.post(f"{settings.LLM_BASE_URL}/chat/completions", json=payload, headers=headers)
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
-            if e.response.status_code == 402:
+            code = e.response.status_code
+            _log_failure(tag, f"http_{code}")
+            if code == 402:
                 raise RuntimeError("AI 服务额度已用尽，请联系管理员充值后重试") from e
-            if e.response.status_code == 401:
+            if code == 401:
                 raise RuntimeError("AI 服务密钥无效，请联系管理员检查配置") from e
-            if e.response.status_code == 429:
+            if code == 429:
                 raise RuntimeError("AI 服务请求过于频繁，请稍等几秒后重试") from e
-            raise RuntimeError(f"AI 服务暂时不可用（HTTP {e.response.status_code}），请稍后重试") from e
+            raise RuntimeError(f"AI 服务暂时不可用（HTTP {code}），请稍后重试") from e
         except httpx.RequestError as e:
+            _log_failure(tag, "network_error")
             raise RuntimeError("AI 服务网络连接失败，请稍后重试") from e
         data = resp.json()
         _log_usage(tag, str(settings.LLM_MODEL), prompt_chars, data.get("usage", {}))
         return data["choices"][0]["message"]["content"]
 
 
-async def call_llm_json(messages: list[dict], temperature: float = 0.3) -> dict | list:
+async def safe_json_call(
+    messages: list[dict],
+    mock_factory,
+    temperature: float = 0.3,
+    max_tokens: int = 4096,
+):
+    """调用 LLM 并解析 JSON；预算用尽时自动降级为示例结果
+
+    保证在额度耗尽的情况下功能依然可用（返回结构完整的示例数据），
+    而不是整站报错。
+    """
+    try:
+        return await call_llm_json(messages, temperature=temperature, max_tokens=max_tokens)
+    except LLMBudgetExceeded as e:
+        print(f"[LLM] budget exceeded, degrade to mock: {e}")
+        return mock_factory()
+
+
+async def call_llm_json(messages: list[dict], temperature: float = 0.3, max_tokens: int = 4096) -> dict | list:
     """调用 LLM 并解析为 JSON"""
-    raw = await call_llm(messages, temperature=temperature)
+    raw = await call_llm(messages, temperature=temperature, max_tokens=max_tokens)
     # 尝试提取 JSON
     try:
         # 尝试直接解析
@@ -139,14 +247,15 @@ async def call_llm_json(messages: list[dict], temperature: float = 0.3) -> dict 
 
 # ========== 写作批改 ==========
 
-async def grade_writing(content: str, writing_type: str, prompt: str, title: str = "") -> dict:
-    """AI 写作批改：六维度评分 + 逐句纠错 + 润色版"""
-    if not settings.LLM_API_KEY:
-        return _mock_writing_grade(content)
-    system_msg = (
-        "你是一位资深英语写作教师，拥有丰富的托福/雅思/学术写作教学经验。"
-        "请对学生作文进行专业批改，严格按照要求的 JSON 格式输出。"
-    )
+_WRITING_SYSTEM = (
+    "你是一位资深英语写作教师，拥有丰富的托福/雅思/学术写作教学经验。"
+    "请对学生作文进行专业批改，严格按照要求的 JSON 格式输出。"
+)
+
+
+async def _grade_writing_full(content: str, writing_type: str, prompt: str, title: str = "") -> dict:
+    """一次性生成全部内容（评分+纠错+润色+拓展词汇）——保留为可回退的完整版"""
+    system_msg = _WRITING_SYSTEM
     user_msg = f"""请批改以下{writing_type}类型英语作文。
 
 题目/要求: {prompt}
@@ -196,10 +305,140 @@ async def grade_writing(content: str, writing_type: str, prompt: str, title: str
   ]
 }}"""
 
-    return await call_llm_json([
+    return await safe_json_call([
         {"role": "system", "content": system_msg},
         {"role": "user", "content": user_msg},
-    ])
+    ], lambda: _mock_writing_grade(content))
+
+
+# ---- 第一段：主批改（评分 + 纠错，不含润色与词汇） ----
+
+_WRITING_CORE_SYSTEM = (
+    "你是一位资深英语写作教师，拥有丰富的托福/雅思/学术写作教学经验。"
+    "你输出的每一条反馈都必须落到学生作文的具体位置上，禁止空泛套话。"
+    "严格按照要求的 JSON 格式输出，不要输出 JSON 之外的任何内容。"
+)
+
+
+async def grade_writing_core(content: str, writing_type: str, prompt: str, title: str = "") -> dict:
+    """主批改：六维度评分 + 总体评价 + 逐句纠错
+
+    刻意不含"润色全文"与"拓展词汇"——这两项占了写作批改 60% 以上的输出 token，
+    但对"知道哪里错、怎么改"的教学目标边际贡献有限，改为学生按需触发。
+    相同作文再次批改时直接复用缓存结果。
+    """
+    if not settings.LLM_API_KEY:
+        return _mock_writing_grade(content)
+
+    user_msg = f"""【任务】批改以下作文
+【类型】{writing_type}
+【题目】{prompt}
+【标题】{title}
+
+【作文原文】
+{content}
+
+【评分维度】每项满分 100，必须全部输出且顺序一致：
+Task Achievement / Coherence & Cohesion / Lexical Resource / Grammatical Range & Accuracy / Content Depth / Organization
+
+【反馈硬性要求】每个维度的 feedback 必须做到：
+① 引用学生原文的具体位置（第几段、哪个论点）；
+② 指出具体缺什么（论据？反例？数据？因果链？）；
+③ 给出可直接操作的改法（例如"第二段论点X缺少支撑，可补充Y方面的例子，写成…"）。
+
+【输出 JSON】
+{{"scores":[{{"name":"Task Achievement","score":85,"maxScore":100,"feedback":"..."}}],"overall_score":82,"ai_feedback":"总体评价文本","error_details":[{{"original":"原句","corrected":"修改后","error_type":"grammar","explanation":"错误说明"}}]}}"""
+
+    result, _hit = await cached_json(
+        "grade_writing",
+        [writing_type, prompt, title, content],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": _WRITING_CORE_SYSTEM},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: _mock_writing_grade(content),
+            max_tokens=2200,
+        ),
+    )
+    return result
+
+
+# ---- 第二段：按需生成（润色范文 + 拓展词汇） ----
+
+_WRITING_ENHANCE_SYSTEM = (
+    "你是一位英语写作润色与词汇教学专家。"
+    "你的润色不是修语法，而是示范如何在内容深度与表达质量上提升一个层级。"
+    "严格按照要求的 JSON 格式输出，不要输出 JSON 之外的任何内容。"
+)
+
+
+async def generate_writing_enhancement(
+    content: str, writing_type: str, prompt: str, weak_dimensions: list[str] | None = None
+) -> dict:
+    """按需生成"润色范文 + 拓展词汇"（学生点击按钮时才调用，相同作文复用缓存）"""
+    if not settings.LLM_API_KEY:
+        return _mock_enhance(content)
+
+    word_count = len(content.split())
+    weak = "、".join(weak_dimensions) if weak_dimensions else "整体表达"
+
+    user_msg = f"""【任务】为下面这篇作文生成"润色范文"与"拓展词汇"
+【类型】{writing_type}
+【题目】{prompt}
+【本次薄弱维度】{weak}
+
+【作文原文】
+{content}
+
+【润色要求】
+- 不能只修语言错误，必须实质性提升内容深度：补充论证、例子、因果分析或细节
+- 与原文形成"语言 + 深度"的对比示范
+- 篇幅与原文相当或略多（原文约 {word_count} 词）
+
+【拓展词汇要求】
+- 8-12 个该主题下地道写作者会使用、但原文未使用的高级词汇/短语
+- 每项含词汇、中文释义、地道用法示例句
+
+【输出 JSON】
+{{"revised_version":"润色后的完整作文","topic_vocabulary":[{{"term":"词汇或短语","definition":"中文释义","example":"地道用法示例句"}}]}}"""
+
+    est_out = int(word_count * 1.7) + 700
+    result, _hit = await cached_json(
+        "writing_enhance",
+        [writing_type, prompt, content],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": _WRITING_ENHANCE_SYSTEM},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: _mock_enhance(content),
+            max_tokens=max(1200, min(4000, est_out)),
+        ),
+        ttl_days=3650,
+    )
+    return result
+
+
+async def grade_writing(content: str, writing_type: str, prompt: str, title: str = "") -> dict:
+    """写作批改统一入口
+
+    默认（WRITING_LAZY_ENHANCE=true）走两段式：先返回评分与纠错，润色版与拓展词汇按需生成；
+    把开关置 false 即恢复为一次性生成全部内容。
+    """
+    if not settings.WRITING_LAZY_ENHANCE:
+        result, _hit = await cached_json(
+            "grade_writing",
+            [writing_type, prompt, title, content],
+            lambda: _grade_writing_full(content, writing_type, prompt, title),
+        )
+        return result
+
+    core = await grade_writing_core(content, writing_type, prompt, title)
+    core.setdefault("revised_version", "")
+    core.setdefault("topic_vocabulary", [])
+    core["enhance_pending"] = not (core.get("revised_version") or core.get("topic_vocabulary"))
+    return core
 
 
 # ========== 口语评分 ==========
@@ -243,10 +482,19 @@ async def evaluate_speaking(transcript: str, topic: str, speaking_type: str, ref
   "reference_answer": "参考示范回答..."
 }}"""
 
-    return await call_llm_json([
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": user_msg},
-    ])
+    result, _hit = await cached_json(
+        "evaluate_speaking",
+        [speaking_type, topic, reference_text, transcript],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: _mock_speaking_eval(topic),
+            max_tokens=1800,
+        ),
+    )
+    return result
 
 
 # ========== 单词分析（阅读上下文） ==========
@@ -277,10 +525,19 @@ async def analyze_single_word(word: str, context: str = "") -> dict:
   "note": "在当前上下文中的特殊含义或用法说明（如有）"
 }}"""
 
-    return await call_llm_json([
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": user_msg},
-    ])
+    result, _hit = await cached_json(
+        "analyze_single_word",
+        [word.lower(), context],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: _mock_single_word(word),
+            max_tokens=1200,
+        ),
+    )
+    return result
 
 
 # ========== 句子分析（长难句） ==========
@@ -335,10 +592,19 @@ async def analyze_single_sentence(sentence: str, difficulty: str = "intermediate
   "tip": "学习建议或注意事项"
 }}"""
 
-    return await call_llm_json([
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": user_msg},
-    ])
+    result, _hit = await cached_json(
+        "analyze_single_sentence",
+        [difficulty, sentence],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: _mock_single_sentence(sentence),
+            max_tokens=1500,
+        ),
+    )
+    return result
 
 
 # ========== 阅读分析 ==========
@@ -383,10 +649,19 @@ async def analyze_reading(content: str, difficulty: str = "intermediate") -> dic
   ]
 }}"""
 
-    return await call_llm_json([
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": user_msg},
-    ])
+    result, _hit = await cached_json(
+        "analyze_reading",
+        [difficulty, content],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: _mock_reading_analysis(content),
+            max_tokens=2000,
+        ),
+    )
+    return result
 
 
 # ========== 翻译评分 ==========
@@ -426,10 +701,19 @@ async def grade_translation(source_text: str, user_translation: str, direction: 
   "translation_tips": ["翻译技巧1", "翻译技巧2"]
 }}"""
 
-    return await call_llm_json([
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": user_msg},
-    ])
+    result, _hit = await cached_json(
+        "grade_translation",
+        [direction, source_text, user_translation],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            _mock_translation_grade,
+            max_tokens=1500,
+        ),
+    )
+    return result
 
 
 # ========== 语法练习生成 ==========
@@ -467,10 +751,18 @@ async def generate_grammar_exercises(grammar_point: str, ex_type: str, difficult
 
 注意：选择题的 options 必须有4个选项；非选择题的 options 为空数组。"""
 
-    result = await call_llm_json([
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": user_msg},
-    ])
+    result, _hit = await cached_json(
+        "generate_grammar_exercises",
+        [grammar_point, ex_type, difficulty, count],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: _mock_grammar_exercises(grammar_point, ex_type, count),
+            max_tokens=1200,
+        ),
+    )
 
     if isinstance(result, list):
         return result[:count]
@@ -497,10 +789,19 @@ async def analyze_word_root(word: str) -> dict:
   "related_words": ["同词根的相关单词1", "相关单词2", "相关单词3"]
 }}"""
 
-    return await call_llm_json([
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": user_msg},
-    ])
+    result, _hit = await cached_json(
+        "analyze_word_root",
+        [word.lower()],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: _mock_word_root(word),
+            max_tokens=1200,
+        ),
+    )
+    return result
 
 
 # ========== 听力素材脚本生成 ==========
@@ -541,21 +842,65 @@ async def generate_listening_script(topic: str, accent: str, speed: float, diffi
 
 注意：脚本内容应自然流畅，符合{accent}口音的英语表达习惯。"""
 
-    result = await call_llm_json([
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": user_msg},
-    ])
+    # 输出上限按目标字数精确换算（英文 1 词 ≈ 1.5 token），再加 JSON 结构开销
+    max_out = max(900, min(4000, int(target_words * 1.6) + 500))
 
-    # 字数不足时自动重试一次（LLM 经常写得偏短）
-    script = str(result.get("script", ""))
-    actual_words = len(script.split())
-    if actual_words < target_words * 0.5:
-        retry_msg = user_msg + f"\n\n【再次强调】上次生成的脚本只有 {actual_words} 词，远低于要求的 {target_words} 词。这次必须写满 {target_words} 词左右，请扩展内容的深度和广度（增加论据、举例、对话轮次等）。"
-        result = await call_llm_json([
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": retry_msg},
-        ])
+    async def _generate_listening() -> dict:
+        result = await safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: _mock_listening_script(topic),
+            max_tokens=max_out,
+        )
+        if not isinstance(result, dict):
+            return _mock_listening_script(topic)
 
+        script = str(result.get("script", ""))
+        actual_words = len(script.split())
+        need = target_words - actual_words
+
+        # 字数明显不足时才补写，而且只补差额
+        # （原实现是把整段 prompt 重发一遍重新生成，输入输出双翻倍，是最大的一处浪费）
+        if 0 < need and actual_words < target_words * 0.5:
+            cont_msg = f"""下面是一段英语听力脚本已完成的部分。请【紧接着】续写，不要重复前文内容。
+
+主题: {topic} 口音: {accent} 难度: {difficulty}
+已完成内容的结尾片段：
+---
+{script[-600:]}
+---
+
+【要求】续写约 {need} 个英文单词（{difficulty} 难度、{accent} 口音表达习惯），
+使全文总词数达到约 {target_words} 词。只输出续写部分。
+
+请严格按 JSON 格式输出：
+{{"continuation": "续写内容（纯英文，约{need}词）"}}"""
+
+            try:
+                extra = await call_llm_json(
+                    [
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": cont_msg},
+                    ],
+                    max_tokens=max(300, min(2500, int(need * 1.6) + 100)),
+                )
+                if isinstance(extra, dict):
+                    addition = str(extra.get("continuation", "")).strip()
+                    if addition:
+                        result["script"] = script.rstrip() + "\n\n" + addition
+            except Exception as e:
+                print(f"[LLM] listening top-up skipped: {e}")
+
+        return result
+
+    # 相同参数的听力素材直接复用：同主题同难度重复生成没有任何意义
+    result, _hit = await cached_json(
+        "generate_listening_script",
+        [topic, accent, speed, difficulty, duration],
+        _generate_listening,
+    )
     return result
 
 
@@ -610,10 +955,20 @@ async def recommend_discussion_topics(category: str, difficulty: str, count: int
   ]
 }}"""
 
-    return await call_llm_json([
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": user_msg},
-    ])
+    result, _hit = await cached_json(
+        "recommend_discussion_topics",
+        [category, difficulty, count],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: _mock_discussion_topics(category, difficulty, count),
+            max_tokens=1500,
+        ),
+        ttl_days=14,
+    )
+    return result
 
 
 # ========== AI 讨论者回复 ==========
@@ -726,10 +1081,20 @@ async def recommend_learning_path(ability_radar: list[dict], weak_points: list[s
   "tips": ["学习建议1", "学习建议2", "学习建议3"]
 }}"""
 
-    return await call_llm_json([
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": user_msg},
-    ])
+    result, _hit = await cached_json(
+        "recommend_learning_path",
+        [ability_radar, weak_points, recent_activities],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            _mock_learning_path,
+            max_tokens=1500,
+        ),
+        ttl_days=1,
+    )
+    return result
 
 
 # ========== Mock 数据（无 API Key 时使用） ==========
@@ -749,6 +1114,19 @@ def _mock_writing_grade(content: str) -> dict:
         "revised_version": content + "\n\n[AI润色版将在配置LLM API Key后提供完整润色]",
         "error_details": [
             {"original": "makes communication easier", "corrected": "facilitates communication", "error_type": "vocabulary", "explanation": "建议使用更正式的词汇 facilitate 替代 make...easier"},
+        ],
+    }
+
+
+def _mock_enhance(content: str) -> dict:
+    """按需增强的示例结果（未配置 API Key 或预算用尽时使用）"""
+    base = _mock_writing_grade(content)
+    return {
+        "revised_version": base.get("revised_version", content),
+        "topic_vocabulary": [
+            {"term": "facilitate", "definition": "促进，使便利", "example": "Digital tools facilitate communication across borders."},
+            {"term": "compelling", "definition": "令人信服的", "example": "The author presents a compelling argument for reform."},
+            {"term": "in light of", "definition": "鉴于，根据", "example": "In light of recent findings, the policy needs revision."},
         ],
     }
 

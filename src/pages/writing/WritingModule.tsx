@@ -88,6 +88,20 @@ function GradingView() {
     }
   }
 
+  // 合并"按需生成"的润色范文与拓展词汇
+  const handleEnhanced = (r: any) => {
+    setResult((prev: any) =>
+      prev
+        ? {
+            ...prev,
+            revised_version: r.revised_version || '',
+            topic_vocabulary: r.topic_vocabulary || [],
+            enhance_pending: false,
+          }
+        : prev
+    )
+  }
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       {/* Input Section */}
@@ -288,6 +302,17 @@ function GradingView() {
               </Card>
             )}
 
+            {result.enhance_pending &&
+              !result.revised_version &&
+              !(result.topic_vocabulary && result.topic_vocabulary.length > 0) && (
+                <EnhancePanel
+                  content={content}
+                  type={writingType}
+                  prompt={prompt || 'General writing practice'}
+                  onEnhanced={handleEnhanced}
+                />
+              )}
+
             {result.topic_vocabulary && result.topic_vocabulary.length > 0 && (
               <TopicVocabularyPanel vocabulary={result.topic_vocabulary} />
             )}
@@ -348,6 +373,46 @@ function GradingView() {
 }
 
 // ===== 批改结果共享组件 =====
+
+/** 按需生成面板：润色范文与拓展词汇改为点击生成，避免每次批改都全额消耗 token */
+function EnhancePanel({ content, type, prompt, onEnhanced }: {
+  content: string
+  type: string
+  prompt: string
+  onEnhanced: (r: any) => void
+}) {
+  const { toast } = useToast()
+  const [loading, setLoading] = useState(false)
+
+  const handleGenerate = async () => {
+    setLoading(true)
+    try {
+      const res: any = await writingApi.enhance({ content, type, prompt })
+      onEnhanced(res)
+      toast('润色范文与拓展词汇已生成', 'success')
+    } catch (err: any) {
+      toast(err?.message || '生成失败，请稍后重试', 'error')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <Card className="border-2 border-dashed border-indigo-200 bg-indigo-50/40">
+      <CardContent className="py-6 text-center">
+        <Sparkles className="w-8 h-8 text-indigo-400 mx-auto mb-2" />
+        <p className="text-sm font-medium text-gray-700">需要润色范文和拓展词汇吗？</p>
+        <p className="text-xs text-gray-400 mt-1 mb-3">
+          评分与逐句纠错已在上方给出，这两项按需生成，无需等待
+        </p>
+        <Button variant="primary" onClick={handleGenerate} disabled={loading}>
+          {loading ? '生成中…' : '生成润色范文 + 拓展词汇'}
+        </Button>
+      </CardContent>
+    </Card>
+  )
+}
+
 
 /** 拓展词汇板块：针对文章主题的高级词汇建议 */
 function TopicVocabularyPanel({ vocabulary }: { vocabulary: any[] }) {
@@ -493,6 +558,20 @@ function DailyPracticeView() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // 合并"按需生成"的润色范文与拓展词汇
+  const handleEnhanced = (r: any) => {
+    setResult((prev: any) =>
+      prev
+        ? {
+            ...prev,
+            revised_version: r.revised_version || '',
+            topic_vocabulary: r.topic_vocabulary || [],
+            enhance_pending: false,
+          }
+        : prev
+    )
   }
 
   const handleBack = () => {
@@ -709,6 +788,16 @@ function DailyPracticeView() {
             </CardContent>
           </Card>
         )}
+        {result.enhance_pending &&
+          !result.revised_version &&
+          !(result.topic_vocabulary && result.topic_vocabulary.length > 0) && (
+            <EnhancePanel
+              content={content}
+              type={selectedType}
+              prompt={selectedTopic?.title || ''}
+              onEnhanced={handleEnhanced}
+            />
+          )}
         {result.topic_vocabulary && result.topic_vocabulary.length > 0 && (
           <TopicVocabularyPanel vocabulary={result.topic_vocabulary} />
         )}
