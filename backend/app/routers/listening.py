@@ -2,16 +2,33 @@
 
 import json
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.user import User
 from app.models.listening import ListeningMaterial, ListeningExercise
 from app.auth.security import get_current_user
 from app.schemas.listening import ListeningGenerateRequest, ListeningMaterialResponse, ListeningImportRequest
-from app.services.llm_service import generate_listening_script
+from app.services.llm_service import generate_listening_script, extract_listening_key_points
 from app.services.speech_service import text_to_speech
 
 router = APIRouter(prefix="/api/listening", tags=["听力模块"])
+
+
+class KeyPointsRequest(BaseModel):
+    script: str
+    count: int = 8
+
+
+@router.post("/key-points")
+async def get_key_points(req: KeyPointsRequest, user: User = Depends(get_current_user)):
+    """AI 通读全文提取听力要点（要点提取练习的参考答案）"""
+    if not req.script or not req.script.strip():
+        raise HTTPException(400, "缺少听力脚本文本")
+    if len(req.script) > 60000:
+        raise HTTPException(400, "脚本过长")
+    result = await extract_listening_key_points(req.script, req.count)
+    return result
 
 
 @router.get("/materials", response_model=list[ListeningMaterialResponse])

@@ -63,6 +63,7 @@ async def evaluate(req: SpeakingEvaluateRequest, db: Session = Depends(get_db), 
         feedback=llm_result.get("feedback", ""),
         reference_answer=llm_result.get("reference_answer", ""),
         pronunciation_detail=pronunciation_detail,
+        transcript_warning=llm_result.get("transcript_warning", ""),
     )
 
 

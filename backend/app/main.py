@@ -29,11 +29,27 @@ from app.models.llm_cache import LLMResultCache  # noqa: F401  注册结果缓�
 from app.routers import auth, listening, speaking, reading, writing, vocabulary, translation, community, teacher, profile, feedback, analytics
 
 
+def _migrate_sqlite_columns():
+    """轻量迁移：为已存在的表补新增列（SQLite create_all 不会改已有表）"""
+    from sqlalchemy import text, inspect
+    try:
+        insp = inspect(engine)
+        # writing_submissions: 2026-10-09 新增 topic_vocabulary（拓展词汇）
+        if "writing_submissions" in insp.get_table_names():
+            cols = {c["name"] for c in insp.get_columns("writing_submissions")}
+            with engine.begin() as conn:
+                if "topic_vocabulary" not in cols:
+                    conn.execute(text("ALTER TABLE writing_submissions ADD COLUMN topic_vocabulary TEXT DEFAULT '[]'"))
+    except Exception as e:
+        print(f"[migrate] lightweight migration skipped: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时创建表"""
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     Base.metadata.create_all(bind=engine)
+    _migrate_sqlite_columns()
     # 创建默认管理员账户（开发环境）
     _create_default_admin()
     print(f"\n{'='*50}")

@@ -5,6 +5,26 @@
 
 let currentUtterance: SpeechSynthesisUtterance | null = null
 
+/** 触发浏览器加载语音列表（Chrome 为异步加载） */
+if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+  window.speechSynthesis.getVoices()
+  window.speechSynthesis.onvoiceschanged = () => { /* 列表就绪，pickVoice 会在播放时重新获取 */ }
+}
+
+/**
+ * 挑选发音最自然的音色：
+ * 1. 语言精确匹配；2. 名称含 Natural / Google / Premium / Enhanced 的优先（多为云端高质量音色）
+ * 3. 都没有则退回同语言前缀匹配，最后用系统默认
+ */
+function pickVoice(voices: SpeechSynthesisVoice[], lang: string): SpeechSynthesisVoice | undefined {
+  if (!voices.length) return undefined
+  const exact = voices.filter(v => v.lang === lang)
+  const pool = exact.length ? exact : voices.filter(v => v.lang.startsWith(lang.split('-')[0]))
+  if (!pool.length) return undefined
+  const natural = pool.find(v => /natural|google|premium|enhanced|siri/i.test(v.name))
+  return natural || pool[0]
+}
+
 export interface TTSOptions {
   text: string
   lang?: string // e.g. 'en-US', 'en-GB', 'en-AU'
@@ -37,9 +57,9 @@ export function speak(options: TTSOptions): boolean {
   utterance.pitch = pitch
   utterance.volume = volume
 
-  // 尝试选择匹配的语音
+  // 尝试选择发音最自然的语音
   const voices = window.speechSynthesis.getVoices()
-  const matchedVoice = voices.find(v => v.lang === lang)
+  const matchedVoice = pickVoice(voices, lang)
   if (matchedVoice) {
     utterance.voice = matchedVoice
   }

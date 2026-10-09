@@ -66,10 +66,24 @@ export function SpeakingModule() {
 }
 
 // ===== Shared Recording Component =====
-function RecordingPanel({ title, topic, onResult }: { title: string; topic: string; onResult?: () => void }) {
+/**
+ * 录音面板：优先使用浏览器语音识别（SpeechRecognition）实时转写，
+ * 识别结果通过 onResult(transcript) 回传给评分接口；
+ * 浏览器不支持时降级为「手动输入转写文本」模式（同样能拿到真实内容评分）。
+ */
+function RecordingPanel({ title, topic, onResult }: { title: string; topic: string; onResult?: (transcript: string) => void }) {
+  const { toast } = useToast()
   const [isRecording, setIsRecording] = useState(false)
   const [duration, setDuration] = useState(0)
+  const [transcript, setTranscript] = useState('')
+  const [interim, setInterim] = useState('')
+  const [finished, setFinished] = useState(false)
+  const [srSupported] = useState(() =>
+    typeof window !== 'undefined' && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
+  )
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const recognitionRef = useRef<any>(null)
+  const transcriptRef = useRef('')
 
   useEffect(() => {
     if (isRecording) {
@@ -80,20 +94,104 @@ function RecordingPanel({ title, topic, onResult }: { title: string; topic: stri
     return () => { if (timerRef) clearInterval(timerRef.current!) }
   }, [isRecording])
 
+  // 卸载时停止识别
+  useEffect(() => {
+    return () => { try { recognitionRef.current?.stop() } catch {} }
+  }, [])
+
+  const startRecognition = () => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (!SR) return false
+    try {
+      const rec = new SR()
+      rec.lang = 'en-US'
+      rec.continuous = true
+      rec.interimResults = true
+      let finalText = ''
+      rec.onresult = (e: any) => {
+        let interimText = ''
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const r = e.results[i]
+          if (r.isFinal) {
+            finalText += r[0].transcript + ' '
+          } else {
+            interimText += r[0].transcript
+          }
+        }
+        transcriptRef.current = finalText.trim()
+        setTranscript(finalText.trim())
+        setInterim(interimText)
+      }
+      rec.onerror = (e: any) => {
+        if (e?.error === 'not-allowed' || e?.error === 'service-not-allowed') {
+          toast('麦克风权限被拒绝，无法实时转写', 'error')
+        } else if (e?.error === 'no-speech') {
+          // 静默处理，continuous 模式下会自动继续
+        } else {
+          toast(`语音识别出错：${e?.error || '未知错误'}，可停止后手动输入转写文本`, 'warning')
+        }
+      }
+      rec.onend = () => {
+        // continuous 模式被系统自动停止时，若仍在录音则尝试重启
+        if (recognitionRef.current === rec && isRecording) {
+          try { rec.start() } catch {}
+        }
+      }
+      rec.start()
+      recognitionRef.current = rec
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  const stopRecognition = () => {
+    const rec = recognitionRef.current
+    if (rec) {
+      rec.onend = null
+      try { rec.stop() } catch {}
+      recognitionRef.current = null
+    }
+  }
+
+  const handleMicClick = () => {
+    if (!isRecording) {
+      setIsRecording(true)
+      setDuration(0)
+      setTranscript('')
+      setInterim('')
+      transcriptRef.current = ''
+      setFinished(false)
+      if (srSupported && !startRecognition()) {
+        toast('语音识别启动失败，请录音后手动输入转写文本', 'warning')
+      }
+    } else {
+      setIsRecording(false)
+      stopRecognition()
+      setInterim('')
+      setFinished(true)
+      const final = (transcriptRef.current || transcript).trim()
+      if (!final && srSupported) {
+        toast('未识别到语音内容，可在下方手动补充转写文本后再提交', 'warning')
+      }
+    }
+  }
+
+  const handleSubmit = () => {
+    const final = (transcriptRef.current || transcript).trim()
+    if (!final) {
+      toast('请先录音或输入你的口述内容，再提交评分', 'warning')
+      return
+    }
+    onResult?.(final)
+  }
+
   return (
     <Card>
       <CardContent className="pt-5">
         <div className="flex flex-col items-center py-8">
           <button
-            onClick={() => {
-              if (!isRecording) {
-                setIsRecording(true)
-                setDuration(0)
-              } else {
-                setIsRecording(false)
-                onResult?.()
-              }
-            }}
+            onClick={handleMicClick}
             className={cn(
               'w-20 h-20 rounded-full flex items-center justify-center transition-all',
               isRecording ? 'bg-red-500 animate-recording' : 'bg-indigo-600 hover:bg-indigo-700'
@@ -102,7 +200,7 @@ function RecordingPanel({ title, topic, onResult }: { title: string; topic: stri
             {isRecording ? <Square className="w-8 h-8 text-white" /> : <Mic className="w-8 h-8 text-white" />}
           </button>
           <p className="mt-4 text-sm text-gray-500">
-            {isRecording ? '正在录音...' : '点击开始录音'}
+            {isRecording ? (srSupported ? '正在录音并实时转写...' : '正在录音（请同时记录你的口述内容）') : '点击开始录音'}
           </p>
           <div className="mt-2 text-2xl font-mono font-bold text-gray-900">
             {formatDuration(duration)}
@@ -121,6 +219,44 @@ function RecordingPanel({ title, topic, onResult }: { title: string; topic: stri
               ))}
             </div>
           )}
+
+          {/* 实时转写展示 */}
+          {(isRecording || finished) && (
+            <div className="mt-6 w-full">
+              <div className="flex items-center justify-between mb-1.5">
+                <p className="text-xs font-medium text-gray-500">
+                  {srSupported ? '实时转写（AI 评分将基于以下真实内容）' : '转写文本（请输入你刚才口述的内容）'}
+                </p>
+                {srSupported && (
+                  <button
+                    className="text-xs text-gray-400 hover:text-indigo-500"
+                    onClick={() => { setTranscript(''); transcriptRef.current = '' }}
+                  >
+                    清空
+                  </button>
+                )}
+              </div>
+              <textarea
+                value={srSupported ? (transcript + (interim ? ' ' + interim : '')) : transcript}
+                onChange={(e) => {
+                  transcriptRef.current = e.target.value
+                  setTranscript(e.target.value)
+                }}
+                readOnly={srSupported && isRecording}
+                placeholder={srSupported ? '开始说话后，转写内容会实时显示在这里（可停止后修正）' : '录音结束后，请在这里输入你口述的英文内容'}
+                className="w-full min-h-[110px] px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400 resize-y bg-gray-50"
+              />
+              {!srSupported && (
+                <p className="text-xs text-gray-400 mt-1">
+                  当前浏览器不支持实时语音识别（建议使用 Chrome / Edge），可直接输入口述内容进行评分。
+                </p>
+              )}
+              <Button className="mt-3 w-full" onClick={handleSubmit} disabled={!(transcriptRef.current || transcript).trim()}>
+                <CheckCircle2 className="w-4 h-4" />
+                提交转写内容，AI 评分
+              </Button>
+            </div>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -128,12 +264,18 @@ function RecordingPanel({ title, topic, onResult }: { title: string; topic: stri
 }
 
 // ===== Score Display =====
-function ScoreDisplay({ scores, feedback, referenceAnswer }: { scores: any[]; feedback: string; referenceAnswer?: string }) {
+function ScoreDisplay({ scores, feedback, referenceAnswer, warning }: { scores: any[]; feedback: string; referenceAnswer?: string; warning?: string }) {
   const { toast } = useToast()
   const avgScore = scores.length > 0 ? scores.reduce((a, b) => a + (b.score || 0), 0) / scores.length : 0
 
   return (
     <div className="space-y-4">
+      {warning && (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2">
+          <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+          <p className="text-sm text-amber-700">{feedback}</p>
+        </div>
+      )}
       <Card className="bg-gradient-to-br from-indigo-50 to-purple-50 border-indigo-100">
         <CardContent className="pt-5">
           <div className="flex items-center justify-between mb-4">
@@ -156,6 +298,20 @@ function ScoreDisplay({ scores, feedback, referenceAnswer }: { scores: any[]; fe
               </div>
             ))}
           </div>
+          {/* 各维度扣分说明（AI 引用原文具体指出问题与改进动作） */}
+          {scores.some(s => s.feedback) && (
+            <div className="mt-4 space-y-2">
+              {scores.filter(s => s.feedback).map((s, i) => (
+                <div key={i} className="p-3 bg-white/70 rounded-lg border border-indigo-100">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={cn('text-sm font-bold', getScoreColor(s.score || 0))}>{s.score || 0}</span>
+                    <span className="text-xs font-medium text-gray-600">{s.name || s.dimension || `维度${i+1}`}</span>
+                  </div>
+                  <p className="text-xs text-gray-600 leading-relaxed whitespace-pre-line">{s.feedback}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -281,7 +437,7 @@ function PresentationView() {
     }
   }, [phase, countdown])
 
-  const handleEvaluate = async () => {
+  const handleEvaluate = async (transcript?: string) => {
     setPhase('loading')
     setError(null)
     trackFeatureUse('speaking', 'ai_evaluate_presentation')
@@ -289,7 +445,7 @@ function PresentationView() {
       const res = await speakingApi.evaluate({
         type: 'presentation',
         topic: selectedTopic,
-        transcript: 'This is a sample transcript of the presentation. The speaker discusses the topic with supporting examples and personal reflections.',
+        transcript: transcript || '',
       })
       setResult(res)
       setPhase('result')
@@ -422,8 +578,18 @@ function PresentationView() {
           <Card>
             <CardContent className="pt-5">
               <div className="flex flex-col items-center py-12">
-                <div className="text-6xl font-bold text-indigo-600 mb-2">{countdown}</div>
-                <p className="text-sm text-gray-400 mb-6">准备中... 组织你的思路</p>
+                <div className={cn(
+                  'text-6xl font-bold mb-2 tabular-nums',
+                  countdown <= 5 ? 'text-red-500 animate-pulse' : 'text-indigo-600'
+                )}>
+                  {countdown}
+                </div>
+                <p className={cn(
+                  'text-sm mb-6',
+                  countdown <= 5 ? 'text-red-500 font-medium' : 'text-gray-400'
+                )}>
+                  {countdown <= 5 ? '准备即将结束，请就位准备开口！' : '准备中... 组织你的思路'}
+                </p>
                 <div className="w-full max-w-xs">
                   <Progress value={(1 - countdown / prepTime) * 100} color="primary" />
                 </div>
@@ -465,6 +631,7 @@ function PresentationView() {
           scores={result.scores || result.score_details || []}
           feedback={result.feedback || result.ai_feedback || '暂无评价'}
           referenceAnswer={result.reference_text || result.reference_answer}
+          warning={result.transcript_warning}
         />
       ) : phase === 'result' && !result ? null : (
         <Card className="flex items-center justify-center min-h-[400px]">
@@ -1822,6 +1989,7 @@ Rules (VERY IMPORTANT):
           <ScoreDisplay
             scores={result.scores || result.score_details || [{ name: '整体表现', score: 78 }]}
             feedback={result.feedback || result.ai_feedback || '对话评估完成'}
+            warning={result.transcript_warning}
           />
         ) : (
           <Card className="flex items-center justify-center min-h-[400px]">
@@ -1850,14 +2018,14 @@ function RetellingView() {
   const [result, setResult] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const handleEvaluate = async () => {
+  const handleEvaluate = async (transcript?: string) => {
     setPhase('loading')
     setError(null)
     try {
       const res = await speakingApi.evaluate({
         type: 'retelling',
         topic: 'The Impact of Social Media on Interpersonal Communication',
-        transcript: 'Social media has fundamentally changed how we communicate. It has made long-distance communication easier but may have reduced face-to-face interactions.',
+        transcript: transcript || '',
       })
       setResult(res)
       setPhase('result')

@@ -24,6 +24,7 @@ class SpeakingEvaluateResult(BaseModel):
     feedback: str
     reference_answer: str = ""
     pronunciation_detail: dict = {}  # Azure 发音评估详情
+    transcript_warning: str = ""  # empty / too_short：转写为空或过短时的显式提示
 
 
 # ========== 讨论房间 ==========

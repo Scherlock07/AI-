@@ -10,7 +10,7 @@ from app.models.writing import WritingSubmission, WritingPeerReview
 from app.auth.security import get_current_user
 from app.schemas.writing import (
     WritingSubmitRequest, WritingGradeRequest, WritingResponse, WritingGradeResult,
-    WritingEnhanceRequest,
+    WritingEnhanceRequest, WritingOcrRequest,
 )
 from app.services.llm_service import grade_writing, generate_writing_enhancement
 from app.services.ocr_service import recognize_handwriting
@@ -113,6 +113,7 @@ async def enhance_writing(req: WritingEnhanceRequest, db: Session = Depends(get_
         )
         if sub:
             sub.revised_version = result.get("revised_version", "")
+            sub.topic_vocabulary = json.dumps(result.get("topic_vocabulary", []), ensure_ascii=False)
             db.commit()
     except Exception:
         db.rollback()
@@ -124,9 +125,11 @@ async def enhance_writing(req: WritingEnhanceRequest, db: Session = Depends(get_
 
 
 @router.post("/ocr", response_model=dict)
-async def ocr_handwriting(image_base64: str, user: User = Depends(get_current_user)):
-    """OCR 识别手写作文"""
-    result = await recognize_handwriting(image_base64)
+async def ocr_handwriting(req: WritingOcrRequest, user: User = Depends(get_current_user)):
+    """OCR 识别手写作文（JSON body: {image_base64}）"""
+    if not req.image_base64:
+        raise HTTPException(400, "缺少图片数据")
+    result = await recognize_handwriting(req.image_base64)
     return result
 
 
@@ -158,6 +161,8 @@ def _to_response(s: WritingSubmission) -> WritingResponse:
         overall_score=s.overall_score,
         ai_feedback=s.ai_feedback or "",
         revised_version=s.revised_version or "",
+        error_details=json.loads(s.error_details) if s.error_details else [],
+        topic_vocabulary=json.loads(s.topic_vocabulary) if s.topic_vocabulary else [],
         submitted_at=s.submitted_at.isoformat() if s.submitted_at else "",
         completed_at=s.completed_at.isoformat() if s.completed_at else None,
     )

@@ -95,6 +95,13 @@ export const listeningApi = {
     formData.append('file', file)
     return request(`/api/listening/upload-audio/${id}`, { method: 'POST', body: formData })
   },
+
+  // AI 通读全文提取听力要点（要点提取练习的参考答案）
+  keyPoints: (data: { script: string; count?: number }) =>
+    request<{ key_points: string[]; summary: string }>('/api/listening/key-points', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 }
 
 // ========== 口语模块 API ==========

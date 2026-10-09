@@ -1205,8 +1205,29 @@ function KeyPointsView({ sentences, accent }: { sentences: string[]; accent: str
   const [userPoints, setUserPoints] = useState('')
   const [showResult, setShowResult] = useState(false)
   const [playCount, setPlayCount] = useState(0)
+  // AI 通读全文提取的参考要点（提交时按需生成，避免无效 LLM 消耗）
+  const [referencePoints, setReferencePoints] = useState<string[]>([])
+  const [refSummary, setRefSummary] = useState('')
+  const [refLoading, setRefLoading] = useState(false)
+  const [refError, setRefError] = useState<string | null>(null)
   const lang = accentToLang(accent)
   const fullText = sentences.join(' ')
+
+  const fetchReferencePoints = useCallback(async () => {
+    if (!fullText.trim() || refLoading) return
+    setRefLoading(true)
+    setRefError(null)
+    try {
+      const res = await listeningApi.keyPoints({ script: fullText, count: Math.min(8, Math.max(4, sentences.length)) })
+      const pts = (res?.key_points || []).map((p: string, i: number) => `${i + 1}. ${p}`)
+      setReferencePoints(pts.length ? pts : ['（未能提取要点，请重试）'])
+      setRefSummary(res?.summary || '')
+    } catch (e: any) {
+      setRefError(e?.message || '参考要点生成失败')
+    } finally {
+      setRefLoading(false)
+    }
+  }, [fullText, sentences.length, refLoading])
 
   const handlePlayAll = () => {
     if (isPlaying) {
@@ -1255,17 +1276,11 @@ function KeyPointsView({ sentences, accent }: { sentences: string[]; accent: str
       return
     }
     setShowResult(true)
-    toast('已生成参考要点，对比看看你遗漏了什么', 'success')
+    if (!referencePoints.length && !refLoading) {
+      fetchReferencePoints()
+    }
+    if (!refError) toast('AI 正在通读全文归纳参考要点…', 'success')
   }
-
-  // 自动生成参考要点（取每句的关键词组）
-  const referencePoints = useMemo(() => {
-    return sentences.map((s, i) => {
-      // 取句子的前几个实词作为要点摘要
-      const words = s.split(/\s+/).slice(0, 8).join(' ')
-      return `${i + 1}. ${words}${s.split(/\s+/).length > 8 ? '...' : ''}`
-    })
-  }, [sentences])
 
   const userPointsList = userPoints.split('\n').filter(p => p.trim())
 
@@ -1337,18 +1352,39 @@ function KeyPointsView({ sentences, accent }: { sentences: string[]; accent: str
 
             {/* 参考要点 */}
             <div>
-              <div className="text-sm font-medium text-gray-700 mb-2">参考要点（基于原文 {sentences.length} 句）</div>
+              <div className="text-sm font-medium text-gray-700 mb-2">参考要点（AI 通读全文归纳 · 基于原文 {sentences.length} 句）</div>
               <div className="p-3 bg-emerald-50 rounded-lg space-y-1">
-                {referencePoints.map((p, i) => (
-                  <p key={i} className="text-sm text-gray-700">{p}</p>
-                ))}
+                {refLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-gray-400 py-2">
+                    <LoadingSpinner className="w-4 h-4" />
+                    AI 正在通读全文归纳要点…
+                  </div>
+                ) : refError ? (
+                  <div className="py-2">
+                    <p className="text-sm text-red-500 mb-2">{refError}</p>
+                    <Button size="sm" variant="outline" onClick={fetchReferencePoints}>重新生成</Button>
+                  </div>
+                ) : referencePoints.length ? (
+                  <>
+                    {referencePoints.map((p, i) => (
+                      <p key={i} className="text-sm text-gray-700">{p}</p>
+                    ))}
+                    {refSummary && (
+                      <p className="text-xs text-gray-500 pt-1 border-t border-emerald-200/60 mt-2">
+                        全文概要：{refSummary}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-sm text-gray-400 py-2">要点生成中…</p>
+                )}
               </div>
             </div>
 
             <div className="p-3 bg-gray-50 rounded-lg">
               <p className="text-xs text-gray-500">
-                提示：参考要点是按原文句子提取的摘要。你可以对比自己的要点，看看遗漏了哪些关键信息。
-                完整理解听力内容后，尝试用自己的话概括要点效果更好。
+                提示：参考要点由 AI 通读全文后按原文顺序归纳，覆盖全文信息层次而非逐句截取。
+                对比自己的要点，看看遗漏了哪些关键信息；用自己的话概括效果更好。
               </p>
             </div>
 

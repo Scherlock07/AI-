@@ -447,6 +447,23 @@ async def evaluate_speaking(transcript: str, topic: str, speaking_type: str, ref
     """AI 口语评估（基于转写文本）"""
     if not settings.LLM_API_KEY:
         return _mock_speaking_eval(topic)
+    # 转写过短/为空时直接给出明确反馈，避免"占位文本被当真实作答打超低分"的困惑
+    if not transcript or not transcript.strip():
+        return {
+            "scores": [],
+            "overall_score": 0,
+            "feedback": "未捕获到有效的语音内容，无法评分。请检查麦克风权限，或尝试在安静环境中更清晰地朗读后再试。",
+            "reference_answer": "",
+            "transcript_warning": "empty",
+        }
+    if len(transcript.split()) < 10:
+        return {
+            "scores": [],
+            "overall_score": 0,
+            "feedback": f"捕获到的语音内容过短（仅 {len(transcript.split())} 个词）：\"{transcript.strip()[:100]}\"。请重新录制一段更完整的回答（建议不少于 5 句）。",
+            "reference_answer": "",
+            "transcript_warning": "too_short",
+        }
     system_msg = (
         "你是一位资深英语口语考官，擅长评估托福/雅思口语表现。"
         "请基于学生的口语转写文本进行多维度评估。"
@@ -467,18 +484,23 @@ async def evaluate_speaking(transcript: str, topic: str, speaking_type: str, ref
 5. Content (内容) — 话题展开、逻辑性、论据支撑
 6. Interactive Communication (互动交流) — 话题回应能力
 
+【评分要求】每个维度的 feedback 必须包含"扣分点具体说明"：
+- 引用学生转写中的原文词句作为证据（如：第三句 "I very like it" 存在副词误用）
+- 说明具体失分原因（如：发音维度指出哪些单词可能有重音/元音问题、内容维度指出哪里论据不足）
+- 给出可直接执行的改进动作；禁止只写"有待提高"这类空泛评语
+
 请严格按以下 JSON 格式输出：
 {{
   "scores": [
-    {{"name": "Fluency", "score": 75, "maxScore": 100, "feedback": "..."}},
-    {{"name": "Pronunciation", "score": 70, "maxScore": 100, "feedback": "..."}},
+    {{"name": "Fluency", "score": 75, "maxScore": 100, "feedback": "具体扣分说明+原文证据+改进动作"}},
+    {{"name": "Pronunciation", "score": 70, "maxScore": 100, "feedback": "指出哪些词的发音可能有问题"}},
     {{"name": "Vocabulary", "score": 80, "maxScore": 100, "feedback": "..."}},
-    {{"name": "Grammar", "score": 72, "maxScore": 100, "feedback": "..."}},
-    {{"name": "Content", "score": 78, "maxScore": 100, "feedback": "..."}},
+    {{"name": "Grammar", "score": 72, "maxScore": 100, "feedback": "引用原文错误句子"}},
+    {{"name": "Content", "score": 78, "maxScore": 100, "feedback": "指出哪里展开不足"}},
     {{"name": "Interactive Communication", "score": 75, "maxScore": 100, "feedback": "..."}}
   ],
   "overall_score": 75,
-  "feedback": "总体评价...",
+  "feedback": "总体评价（含学生实际说到的内容回顾）...",
   "reference_answer": "参考示范回答..."
 }}"""
 
@@ -901,6 +923,57 @@ async def generate_listening_script(topic: str, accent: str, speed: float, diffi
         [topic, accent, speed, difficulty, duration],
         _generate_listening,
     )
+    return result
+
+
+# ========== 听力全文要点提取 ==========
+
+async def extract_listening_key_points(script: str, count: int = 8) -> dict:
+    """AI 提取听力素材全文要点（供要点提取练习的参考答案）。
+
+    前端旧实现是"逐句截前 8 个词"拼接，不是真正的要点。
+    这里让 LLM 通读全文后按语义归纳层次化要点，每条注明对应原文位置。
+    """
+    if not settings.LLM_API_KEY:
+        # 无 key 时退化为按句提取（保持可用）
+        sents = [s.strip() for s in script.split(".") if s.strip()]
+        points = [s[:80] for s in sents[:count]]
+        return {"key_points": points, "summary": ""}
+
+    system_msg = "你是一位英语听力教学专家，擅长归纳听力材料的核心信息层次。"
+    user_msg = f"""以下是学生刚听完的一段英语听力素材。请通读全文后，提取全文的核心要点作为"要点提取练习"的参考答案。
+
+听力素材:
+---
+{script[:6000]}
+---
+
+【提取要求】
+1. 按全文语义逻辑归纳 {count} 条左右要点（核心论点/关键事实/重要转折/结论），而不是逐句截取
+2. 每条要点用中文概括（学生是中文母语的英语学习者），保留关键英文术语/数字
+3. 要点之间不重复、按原文出现顺序排列
+4. 一句话 summary 概括全文主旨
+
+请严格按 JSON 格式输出：
+{{
+  "key_points": ["要点1", "要点2", "..."],
+  "summary": "一句话主旨概括"
+}}"""
+
+    result, _hit = await cached_json(
+        "extract_listening_key_points",
+        [script, count],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: {"key_points": [], "summary": ""},
+            max_tokens=900,
+        ),
+    )
+    if not isinstance(result, dict):
+        return {"key_points": [], "summary": ""}
     return result
 
 

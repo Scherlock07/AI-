@@ -42,6 +42,8 @@ class WritingResponse(BaseModel):
     overall_score: int = 0
     ai_feedback: str = ""
     revised_version: str = ""
+    error_details: list[dict] = []
+    topic_vocabulary: list[dict] = []
     submitted_at: str = ""
     completed_at: str | None = None
 
@@ -69,3 +71,7 @@ class WritingEnhanceRequest(BaseModel):
     type: str = "argumentative"
     prompt: str = ""
     weak_dimensions: list[str] = []
+
+
+class WritingOcrRequest(BaseModel):
+    image_base64: str

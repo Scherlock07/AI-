@@ -64,10 +64,10 @@ export function EmptyState({ icon, title, desc }: { icon?: React.ReactNode; titl
   )
 }
 
-export function LoadingSpinner({ size = 'md' }: { size?: 'sm' | 'md' | 'lg' }) {
+export function LoadingSpinner({ size = 'md', className }: { size?: 'sm' | 'md' | 'lg'; className?: string }) {
   const sizes = { sm: 'w-4 h-4', md: 'w-6 h-6', lg: 'w-8 h-8' }
   return (
-    <div className={cn('border-2 border-indigo-200 border-t-indigo-500 rounded-full animate-spin', sizes[size])} />
+    <div className={cn('border-2 border-indigo-200 border-t-indigo-500 rounded-full animate-spin', sizes[size], className)} />
   )
 }
 

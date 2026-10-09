@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -67,6 +67,9 @@ function GradingView() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [showFullRevised, setShowFullRevised] = useState(false)
+  const [ocrLoading, setOcrLoading] = useState(false)
+  const [ocrConfidence, setOcrConfidence] = useState<number | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const handleGrade = async () => {
     setLoading(true)
@@ -88,6 +91,48 @@ function GradingView() {
     }
   }
 
+  // OCR 拍照上传：图片转 base64 → 后端 Tesseract 识别 → 回填内容供手动修正
+  const handleOcrFile = async (file: File) => {
+    if (!/\.(jpe?g|png|webp|bmp)$/i.test(file.name)) {
+      toast('请上传 JPG / PNG / WebP 格式的图片', 'warning')
+      return
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast('图片过大（超过 10MB），请压缩后重试', 'warning')
+      return
+    }
+    setOcrLoading(true)
+    setOcrConfidence(null)
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          const dataUrl = String(reader.result || '')
+          resolve(dataUrl.slice(dataUrl.indexOf(',') + 1))
+        }
+        reader.onerror = () => reject(new Error('图片读取失败'))
+        reader.readAsDataURL(file)
+      })
+      const res: any = await writingApi.ocr(base64)
+      if (res?.error) {
+        toast(res.error, 'error')
+        return
+      }
+      if (!res?.text) {
+        toast('未能识别出文字，请尝试更清晰、光线充足的照片', 'warning')
+        return
+      }
+      setContent(res.text)
+      setOcrConfidence(typeof res.confidence === 'number' ? res.confidence : null)
+      setInputMode('type')
+      toast('OCR 识别完成，请核对并修正识别文本后再提交批改', 'success')
+    } catch (err: any) {
+      toast(err?.message || 'OCR 识别失败，请重试', 'error')
+    } finally {
+      setOcrLoading(false)
+    }
+  }
+
   // 合并"按需生成"的润色范文与拓展词汇
   const handleEnhanced = (r: any) => {
     setResult((prev: any) =>
@@ -99,6 +144,156 @@ function GradingView() {
             enhance_pending: false,
           }
         : prev
+    )
+  }
+
+  // ===== 批改结果：全宽居中展示，避免挤压在侧栏 =====
+  if (result) {
+    return (
+      <div className="max-w-3xl mx-auto space-y-4">
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => setResult(null)}
+            className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            返回修改作文
+          </button>
+          <Button size="sm" variant="outline" onClick={handleGrade} disabled={loading}>
+            {loading ? <><LoadingSpinner size="sm" />重新批改中...</> : '重新批改'}
+          </Button>
+        </div>
+
+        <Card className="bg-gradient-to-br from-indigo-50 to-purple-50 border-indigo-100">
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <div className="text-sm text-gray-500 mb-1">综合评分</div>
+                <div className="flex items-end gap-2">
+                  <span className="text-4xl font-bold text-indigo-600">{result.overall_score}</span>
+                  <span className="text-sm text-gray-400 mb-1">/ 100</span>
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-sm text-gray-500 mb-1">词数</div>
+                <div className="text-2xl font-bold text-gray-700">{content.trim().split(/\s+/).filter(Boolean).length}</div>
+              </div>
+            </div>
+            <Progress value={result.overall_score} color="primary" />
+          </CardContent>
+        </Card>
+
+        {result.scores && (
+          <Card>
+            <CardHeader>
+              <CardTitle>多维度评分</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {result.scores.map((dim: any) => (
+                  <div key={dim.name}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm font-medium text-gray-700">{dim.name}</span>
+                      <span className={cn('text-sm font-bold', getScoreColor(dim.score))}>{dim.score}</span>
+                    </div>
+                    <Progress value={dim.score} color={dim.score >= 85 ? 'success' : dim.score >= 70 ? 'primary' : 'warning'} />
+                    {dim.feedback && <p className="text-xs text-gray-500 mt-1 leading-relaxed">{dim.feedback}</p>}
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {result.ai_feedback && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-indigo-500" />
+                <CardTitle>AI 综合评语</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-gray-700 leading-7">{result.ai_feedback}</p>
+            </CardContent>
+          </Card>
+        )}
+
+        {result.error_details && result.error_details.length > 0 && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Lightbulb className="w-5 h-5 text-amber-500" />
+                <CardTitle>逐句纠错</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {result.error_details.map((imp: any, i: number) => (
+                  <div key={i} className="p-3 bg-gray-50 rounded-lg">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                      <span className="text-sm text-red-500 line-through">{imp.original}</span>
+                      <ArrowRight className="w-3 h-3 text-gray-400" />
+                      <span className="text-sm text-emerald-600 font-medium">{imp.corrected}</span>
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      <Badge variant="default" className="mr-1">{imp.error_type}</Badge>
+                      {imp.explanation}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {result.enhance_pending &&
+          !result.revised_version &&
+          !(result.topic_vocabulary && result.topic_vocabulary.length > 0) && (
+            <EnhancePanel
+              content={content}
+              type={writingType}
+              prompt={prompt || 'General writing practice'}
+              onEnhanced={handleEnhanced}
+            />
+          )}
+
+        {result.topic_vocabulary && result.topic_vocabulary.length > 0 && (
+          <TopicVocabularyPanel vocabulary={result.topic_vocabulary} />
+        )}
+
+        {result.revised_version && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-purple-500" />
+                  <CardTitle>AI润色版本</CardTitle>
+                </div>
+                <button
+                  onClick={() => setShowFullRevised(true)}
+                  className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                  title="全屏居中查看"
+                >
+                  <Maximize2 className="w-3.5 h-3.5" />
+                  全屏查看
+                </button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-gray-700 leading-7 whitespace-pre-wrap line-clamp-[12]">{result.revised_version}</p>
+              <p className="text-xs text-gray-400 mt-2">内容较长？点击右上角"全屏查看"阅读完整润色版</p>
+            </CardContent>
+          </Card>
+        )}
+
+        <FullscreenTextModal
+          open={showFullRevised}
+          title="AI 润色版本（全屏）"
+          text={result.revised_version || ''}
+          onClose={() => setShowFullRevised(false)}
+        />
+      </div>
     )
   }
 
@@ -176,14 +371,52 @@ function GradingView() {
               </div>
             ) : (
               <div
-                onClick={() => toast('OCR图片上传功能开发中，请使用打字输入', 'info')}
-                className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center hover:border-indigo-300 transition-colors cursor-pointer"
+                onClick={() => !ocrLoading && fileInputRef.current?.click()}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  const f = e.dataTransfer.files?.[0]
+                  if (f) handleOcrFile(f)
+                }}
+                className={cn(
+                  'border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer',
+                  ocrLoading ? 'border-indigo-300 bg-indigo-50/40' : 'border-gray-200 hover:border-indigo-300'
+                )}
               >
-                <Upload className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-                <p className="text-sm text-gray-500 mb-1">点击或拖拽上传手写作文照片</p>
-                <p className="text-xs text-gray-400">支持 JPG / PNG，AI将自动识别手写内容</p>
-                <Badge variant="warning" className="mt-3">OCR识别后可手动修正</Badge>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/bmp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    if (f) handleOcrFile(f)
+                    e.target.value = ''
+                  }}
+                />
+                {ocrLoading ? (
+                  <>
+                    <LoadingSpinner size="lg" className="mx-auto mb-2" />
+                    <p className="text-sm text-gray-500 mb-1">AI 正在识别手写内容...</p>
+                    <p className="text-xs text-gray-400">识别完成后自动回填到文本框，可手动修正</p>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-10 h-10 text-gray-300 mx-auto mb-2" />
+                    <p className="text-sm text-gray-500 mb-1">点击或拖拽上传手写作文照片</p>
+                    <p className="text-xs text-gray-400">
+                      支持 JPG / PNG / WebP（10MB 以内），光线充足、字迹清晰的横拍照片识别效果最佳
+                    </p>
+                    <Badge variant="warning" className="mt-3">OCR 识别后回填文本框，可手动修正</Badge>
+                  </>
+                )}
               </div>
+            )}
+
+            {ocrConfidence !== null && content && inputMode === 'type' && (
+              <p className="mt-2 text-xs text-gray-400">
+                OCR 识别置信度约 {Math.round(ocrConfidence * 100)}%，请核对上方文本中的识别错误
+              </p>
             )}
 
             {error && (
@@ -215,141 +448,9 @@ function GradingView() {
         </Card>
       </div>
 
-      {/* Result Section */}
+      {/* Result Section：结果走全宽分支，这里只保留批改中/空态 */}
       <div className="space-y-4">
-        {result ? (
-          <>
-            <Card className="bg-gradient-to-br from-indigo-50 to-purple-50 border-indigo-100">
-              <CardContent className="pt-5">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <div className="text-sm text-gray-500 mb-1">综合评分</div>
-                    <div className="flex items-end gap-2">
-                      <span className="text-4xl font-bold text-indigo-600">{result.overall_score}</span>
-                      <span className="text-sm text-gray-400 mb-1">/ 100</span>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm text-gray-500 mb-1">词数</div>
-                    <div className="text-2xl font-bold text-gray-700">{content.trim().split(/\s+/).filter(Boolean).length}</div>
-                  </div>
-                </div>
-                <Progress value={result.overall_score} color="primary" />
-              </CardContent>
-            </Card>
-
-            {result.scores && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>多维度评分</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    {result.scores.map((dim: any) => (
-                      <div key={dim.name}>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-sm font-medium text-gray-700">{dim.name}</span>
-                          <span className={cn('text-sm font-bold', getScoreColor(dim.score))}>{dim.score}</span>
-                        </div>
-                        <Progress value={dim.score} color={dim.score >= 85 ? 'success' : dim.score >= 70 ? 'primary' : 'warning'} />
-                        <p className="text-xs text-gray-400 mt-1">{dim.feedback}</p>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {result.ai_feedback && (
-              <Card>
-                <CardHeader>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-5 h-5 text-indigo-500" />
-                    <CardTitle>AI 综合评语</CardTitle>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-gray-700 leading-relaxed">{result.ai_feedback}</p>
-                </CardContent>
-              </Card>
-            )}
-
-            {result.error_details && result.error_details.length > 0 && (
-              <Card>
-                <CardHeader>
-                  <div className="flex items-center gap-2">
-                    <Lightbulb className="w-5 h-5 text-amber-500" />
-                    <CardTitle>逐句纠错</CardTitle>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    {result.error_details.map((imp: any, i: number) => (
-                      <div key={i} className="p-3 bg-gray-50 rounded-lg">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-sm text-red-500 line-through">{imp.original}</span>
-                          <ArrowRight className="w-3 h-3 text-gray-400" />
-                          <span className="text-sm text-emerald-600 font-medium">{imp.corrected}</span>
-                        </div>
-                        <p className="text-xs text-gray-400">
-                          <Badge variant="default" className="mr-1">{imp.error_type}</Badge>
-                          {imp.explanation}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {result.enhance_pending &&
-              !result.revised_version &&
-              !(result.topic_vocabulary && result.topic_vocabulary.length > 0) && (
-                <EnhancePanel
-                  content={content}
-                  type={writingType}
-                  prompt={prompt || 'General writing practice'}
-                  onEnhanced={handleEnhanced}
-                />
-              )}
-
-            {result.topic_vocabulary && result.topic_vocabulary.length > 0 && (
-              <TopicVocabularyPanel vocabulary={result.topic_vocabulary} />
-            )}
-
-            {result.revised_version && (
-              <Card>
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Sparkles className="w-5 h-5 text-purple-500" />
-                      <CardTitle>AI润色版本</CardTitle>
-                    </div>
-                    <button
-                      onClick={() => setShowFullRevised(true)}
-                      className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
-                      title="全屏居中查看"
-                    >
-                      <Maximize2 className="w-3.5 h-3.5" />
-                      全屏查看
-                    </button>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap line-clamp-[12]">{result.revised_version}</p>
-                  <p className="text-xs text-gray-400 mt-2">内容较长？点击右上角"全屏查看"阅读完整润色版</p>
-                </CardContent>
-              </Card>
-            )}
-
-            <FullscreenTextModal
-              open={showFullRevised}
-              title="AI 润色版本（全屏）"
-              text={result.revised_version || ''}
-              onClose={() => setShowFullRevised(false)}
-            />
-          </>
-        ) : loading ? (
+        {loading ? (
           <Card className="h-full flex items-center justify-center min-h-[400px]">
             <div className="text-center">
               <LoadingSpinner size="lg" />
@@ -918,6 +1019,8 @@ function HistoryView() {
   const [writings, setWritings] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [showFullRevised, setShowFullRevised] = useState(false)
 
   const fetchWritings = async () => {
     setLoading(true)
@@ -952,47 +1055,166 @@ function HistoryView() {
 
   return (
     <div className="space-y-4">
-      {writings.map((w: any) => (
-        <Card key={w.id} hover>
-          <CardContent className="pt-5">
-            <div className="flex items-start justify-between mb-3">
-              <div className="flex-1">
-                <div className="flex items-center gap-2 mb-1">
-                  <h3 className="font-semibold text-gray-900">{w.title || '未命名作文'}</h3>
-                  <Badge variant={w.type === 'argumentative' ? 'primary' : w.type === 'chart' ? 'success' : w.type === 'creative' ? 'warning' : 'default'}>
-                    {w.type === 'argumentative' ? '议论文' : w.type === 'chart' ? '图表分析' : w.type === 'creative' ? '趣味写作' : '名篇仿写'}
-                  </Badge>
+      {writings.map((w: any) => {
+        const expanded = expandedId === w.id
+        return (
+          <Card key={w.id} hover>
+            <CardContent className="pt-5">
+              <div
+                className="flex items-start justify-between mb-3 cursor-pointer"
+                onClick={() => setExpandedId(expanded ? null : w.id)}
+              >
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <h3 className="font-semibold text-gray-900">{w.title || '未命名作文'}</h3>
+                    <Badge variant={w.type === 'argumentative' ? 'primary' : w.type === 'chart' ? 'success' : w.type === 'creative' ? 'warning' : 'default'}>
+                      {w.type === 'argumentative' ? '议论文' : w.type === 'chart' ? '图表分析' : w.type === 'creative' ? '趣味写作' : '名篇仿写'}
+                    </Badge>
+                  </div>
+                  <p className="text-sm text-gray-400">{formatDate(w.submitted_at || w.created_at)} · {w.word_count || (w.content || '').split(/\s+/).length} 词</p>
                 </div>
-                <p className="text-sm text-gray-400">{formatDate(w.submitted_at || w.created_at)} · {w.word_count || (w.content || '').split(/\s+/).length} 词</p>
+                <div className="flex items-center gap-3">
+                  {w.overall_score ? (
+                    <div className="text-right">
+                      <div className={cn('text-3xl font-bold', getScoreColor(w.overall_score))}>{w.overall_score}</div>
+                      <div className="text-xs text-gray-400">综合评分</div>
+                    </div>
+                  ) : null}
+                  <span className={cn('text-xs text-gray-400 transition-transform shrink-0', expanded && 'rotate-90')}>
+                    <ArrowRight className="w-4 h-4" />
+                  </span>
+                </div>
               </div>
-              {w.overall_score && (
-                <div className="text-right">
-                  <div className={cn('text-3xl font-bold', getScoreColor(w.overall_score))}>{w.overall_score}</div>
-                  <div className="text-xs text-gray-400">综合评分</div>
+
+              {w.scores && w.scores.length > 0 && (
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-3">
+                  {w.scores.map((s: any) => (
+                    <div key={s.name} className="text-center">
+                      <div className={cn('text-sm font-bold mb-1', getScoreColor(s.score))}>{s.score}</div>
+                      <div className="text-xs text-gray-400">{s.name}</div>
+                    </div>
+                  ))}
                 </div>
               )}
-            </div>
 
-            {w.scores && w.scores.length > 0 && (
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-3">
-                {w.scores.map((s: any) => (
-                  <div key={s.name} className="text-center">
-                    <div className={cn('text-sm font-bold mb-1', getScoreColor(s.score))}>{s.score}</div>
-                    <div className="text-xs text-gray-400">{s.name}</div>
+              {w.ai_feedback && !expanded && (
+                <div className="p-3 bg-indigo-50 rounded-lg flex items-start gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
+                  <p className="text-sm text-gray-600 line-clamp-2">{w.ai_feedback}</p>
+                </div>
+              )}
+
+              {expanded && (
+                <div className="space-y-4 mt-2 pt-4 border-t border-gray-100">
+                  {/* 原文 */}
+                  <div>
+                    <div className="text-sm font-medium text-gray-700 mb-2">我的作文</div>
+                    <div className="p-3 bg-gray-50 rounded-lg max-h-72 overflow-y-auto">
+                      <p className="text-sm text-gray-700 leading-7 whitespace-pre-wrap">{w.content}</p>
+                    </div>
                   </div>
-                ))}
-              </div>
-            )}
 
-            {w.ai_feedback && (
-              <div className="p-3 bg-indigo-50 rounded-lg flex items-start gap-2">
-                <CheckCircle2 className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
-                <p className="text-sm text-gray-600">{w.ai_feedback}</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      ))}
+                  {/* 各维度评分详情 */}
+                  {w.scores && w.scores.length > 0 && (
+                    <div>
+                      <div className="text-sm font-medium text-gray-700 mb-2">多维度评分</div>
+                      <div className="space-y-3">
+                        {w.scores.map((s: any, i: number) => (
+                          <div key={i}>
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-sm font-medium text-gray-700">{s.name}</span>
+                              <span className={cn('text-sm font-bold', getScoreColor(s.score))}>{s.score}</span>
+                            </div>
+                            <Progress value={s.score} color={s.score >= 85 ? 'success' : s.score >= 70 ? 'primary' : 'warning'} />
+                            {s.feedback && <p className="text-xs text-gray-500 mt-1 leading-relaxed">{s.feedback}</p>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 综合评语 */}
+                  {w.ai_feedback && (
+                    <div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <CheckCircle2 className="w-4 h-4 text-indigo-500" />
+                        <span className="text-sm font-medium text-gray-700">AI 综合评语</span>
+                      </div>
+                      <div className="p-3 bg-indigo-50 rounded-lg">
+                        <p className="text-sm text-gray-600 leading-7">{w.ai_feedback}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 逐句纠错 */}
+                  {w.error_details && w.error_details.length > 0 && (
+                    <div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <Lightbulb className="w-4 h-4 text-amber-500" />
+                        <span className="text-sm font-medium text-gray-700">逐句纠错（{w.error_details.length} 处）</span>
+                      </div>
+                      <div className="space-y-2">
+                        {w.error_details.map((imp: any, i: number) => (
+                          <div key={i} className="p-3 bg-gray-50 rounded-lg">
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                              <span className="text-sm text-red-500 line-through">{imp.original}</span>
+                              <ArrowRight className="w-3 h-3 text-gray-400" />
+                              <span className="text-sm text-emerald-600 font-medium">{imp.corrected}</span>
+                            </div>
+                            <p className="text-xs text-gray-500">
+                              <Badge variant="default" className="mr-1">{imp.error_type}</Badge>
+                              {imp.explanation}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 拓展词汇 */}
+                  <TopicVocabularyPanel vocabulary={w.topic_vocabulary || []} />
+
+                  {/* 润色版 */}
+                  {w.revised_version && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <Sparkles className="w-4 h-4 text-purple-500" />
+                          <span className="text-sm font-medium text-gray-700">AI 润色版本</span>
+                        </div>
+                        <button
+                          onClick={() => setShowFullRevised(true)}
+                          className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                        >
+                          <Maximize2 className="w-3.5 h-3.5" />
+                          全屏查看
+                        </button>
+                      </div>
+                      <div className="p-3 bg-purple-50/60 rounded-lg">
+                        <p className="text-sm text-gray-700 leading-7 whitespace-pre-wrap line-clamp-[12]">{w.revised_version}</p>
+                      </div>
+                      {showFullRevised && expandedId === w.id && (
+                        <FullscreenTextModal
+                          open={showFullRevised}
+                          title={`${w.title || '未命名作文'} · AI 润色版本（全屏）`}
+                          text={w.revised_version}
+                          onClose={() => setShowFullRevised(false)}
+                        />
+                      )}
+                    </div>
+                  )}
+
+                  {!w.error_details?.length && !w.revised_version && (
+                    <p className="text-xs text-gray-400 text-center">
+                      这篇早期记录保存时未包含逐句纠错/润色详情，新提交的作文会完整保存
+                    </p>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )
+      })}
     </div>
   )
 }

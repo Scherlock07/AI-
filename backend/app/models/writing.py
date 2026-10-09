@@ -25,6 +25,7 @@ class WritingSubmission(Base):
     ai_feedback = Column(Text, default="")
     revised_version = Column(Text, default="")  # AI 润色版
     error_details = Column(Text, default="[]")  # JSON: 逐句错误标注
+    topic_vocabulary = Column(Text, default="[]")  # JSON: 按需生成的拓展词汇（/enhance 回填）
     submitted_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
 

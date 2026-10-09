@@ -207,13 +207,17 @@ function ImportView() {
     reader.onload = async () => {
       const base64 = (reader.result as string).split(',')[1]
       try {
-        const res = await writingApi.ocr(base64)
-        const text = res.text || res.content || res.result || ''
+        const res: any = await writingApi.ocr(base64)
+        if (res?.error) {
+          toast('OCR 服务异常：' + res.error, 'error')
+          return
+        }
+        const text = res?.text || res?.content || res?.result || ''
         if (text) {
           setContent(prev => prev ? prev + '\n' + text : text)
-          toast('OCR识别成功，文本已填入', 'success')
+          toast('OCR 识别完成，请核对文本框中的识别结果并修正错误后再导入', 'success')
         } else {
-          toast('OCR未识别到文本，请尝试更清晰的图片', 'warning')
+          toast('未识别到文本。建议：横拍、光线充足、文字占画面主体、避免阴影和反光', 'warning')
         }
       } catch (err: any) {
         toast('OCR识别失败：' + (err.message || '请稍后重试'), 'error')
@@ -277,9 +281,9 @@ function ImportView() {
   }
 
   const importModes = [
-    { key: 'scan' as const, title: '扫描图片', icon: Scan, desc: 'OCR识别印刷体或手写体文本', color: 'from-blue-400 to-blue-600' },
+    { key: 'scan' as const, title: '扫描图片', icon: Scan, desc: 'JPG / PNG / WebP，≤10MB；印刷体识别效果最佳，手写体需字迹工整', color: 'from-blue-400 to-blue-600' },
     { key: 'upload' as const, title: '上传文件', icon: FileText, desc: '支持 TXT 格式，自动填入', color: 'from-purple-400 to-purple-600' },
-    { key: 'paste' as const, title: '粘贴文本', icon: Upload, desc: '直接粘贴外刊文章或文本内容', color: 'from-emerald-400 to-emerald-600' },
+    { key: 'paste' as const, title: '粘贴文本', icon: Upload, desc: '直接粘贴外刊文章或文本内容（最准确的方式）', color: 'from-emerald-400 to-emerald-600' },
   ]
 
   return (
@@ -1066,7 +1070,7 @@ function AnalyzeView({ initialContent }: { initialContent?: string }) {
                 <div className="flex items-center gap-2">
                   <h3 className="text-xl font-bold text-gray-900">{wordPopup.word}</h3>
                   <button
-                    onClick={() => speak({ text: wordPopup.word })}
+                    onClick={() => speak({ text: wordPopup.word, lang: 'en-US', rate: 0.9 })}
                     className="text-indigo-400 hover:text-indigo-600 transition-colors"
                     title="发音"
                   >
@@ -1247,8 +1251,9 @@ function VocabItem({ v, onAnalyze }: { v: any; onAnalyze: () => void }) {
         </button>
         {v.phonetic && <span className="text-xs text-gray-400">{v.phonetic}</span>}
         <button
-          onClick={() => speak({ text: v.word || v.term || '' })}
+          onClick={() => speak({ text: v.word || v.term || '', lang: 'en-US', rate: 0.9 })}
           className="text-indigo-300 hover:text-indigo-500 transition-colors"
+          title="发音"
         >
           <Volume2 className="w-3.5 h-3.5" />
         </button>
