@@ -2,6 +2,7 @@
 
 import json
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.user import User
@@ -12,9 +13,32 @@ from app.schemas.reading import (
     WordAnalysisRequest, WordAnalysisResult,
     SentenceAnalysisRequest, SentenceAnalysisResult,
 )
-from app.services.llm_service import analyze_reading, analyze_single_word, analyze_single_sentence
+from app.services.llm_service import analyze_reading, analyze_single_word, analyze_single_sentence, generate_reading_text
 
 router = APIRouter(prefix="/api/reading", tags=["阅读模块"])
+
+
+class GenerateTextRequest(BaseModel):
+    topic: str
+    difficulty: str = "intermediate"  # beginner / intermediate / advanced
+    length: str = "medium"  # short / medium / long
+
+
+@router.post("/generate-text")
+async def generate_text(req: GenerateTextRequest, user: User = Depends(get_current_user)):
+    """AI 按主题+难度生成阅读文本（难度作用于文本本身的词汇与句法复杂度）"""
+    if not req.topic.strip():
+        raise HTTPException(400, "缺少主题")
+    if len(req.topic) > 200:
+        raise HTTPException(400, "主题过长")
+    if req.difficulty not in ("beginner", "intermediate", "advanced"):
+        req.difficulty = "intermediate"
+    if req.length not in ("short", "medium", "long"):
+        req.length = "medium"
+    result = await generate_reading_text(req.topic, req.difficulty, req.length)
+    if not result or not result.get("content"):
+        raise HTTPException(500, "生成失败，请稍后重试")
+    return result
 
 
 @router.get("/texts", response_model=list[ReadingTextResponse])

@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { speakingApi, profileApi } from '@/api/client'
 import { trackFeatureUse } from '@/lib/tracker'
+import { dailyIndex, todayLabel } from '@/lib/daily'
+import { speak, stop as stopTTS } from '@/lib/tts'
 import { useToast } from '@/contexts/ToastContext'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
@@ -417,16 +419,30 @@ const PRESENTATION_TOPICS = [
 
 // ===== Presentation View =====
 function PresentationView() {
+  const { toast } = useToast()
   const [phase, setPhase] = useState<'topic' | 'prepare' | 'record' | 'result' | 'loading'>('topic')
   const [prepTime, setPrepTime] = useState(60)
   const [countdown, setCountdown] = useState(60)
   const [result, setResult] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
-  const [selectedTopic, setSelectedTopic] = useState(PRESENTATION_TOPICS[0].title)
+  // 题库 = 内置题库 + 本次会话 AI 生成的话题
+  const [allTopics, setAllTopics] = useState(PRESENTATION_TOPICS)
+  // 今日话题按日期轮换（每天自动换一题，不消耗 LLM 调用）
+  const todayIdx = dailyIndex(PRESENTATION_TOPICS.length)
+  const todayTopic = allTopics[todayIdx] || allTopics[0]
+  const [selectedTopic, setSelectedTopic] = useState(todayTopic.title)
   const [showBank, setShowBank] = useState(false)
   const [filterCategory, setFilterCategory] = useState('')
+  const [filterDifficulty, setFilterDifficulty] = useState('')
+  // AI 生成话题
+  const [genTheme, setGenTheme] = useState('')
+  const [genDifficulty, setGenDifficulty] = useState('intermediate')
+  const [genLoading, setGenLoading] = useState(false)
+  // 自定义话题
+  const [customTopic, setCustomTopic] = useState('')
 
   const categories = ['全部', '科技', '人物', '经历', '社会', '文化', '教育', '环境']
+  const difficulties = ['全部', '初级', '中级', '高级']
 
   useEffect(() => {
     if (phase === 'prepare' && countdown > 0) {
@@ -455,9 +471,52 @@ function PresentationView() {
     }
   }
 
-  const filteredTopics = filterCategory === '全部' || !filterCategory
-    ? PRESENTATION_TOPICS
-    : PRESENTATION_TOPICS.filter(t => t.category === filterCategory)
+  // AI 按主题方向+难度生成新话题（追加进题库并自动选中第一题）
+  const handleGenerateTopics = async () => {
+    if (!genTheme.trim()) {
+      toast('请先输入主题方向', 'warning')
+      return
+    }
+    setGenLoading(true)
+    try {
+      const res = await speakingApi.generateTopic({ theme: genTheme.trim(), difficulty: genDifficulty, count: 3 })
+      const topics = (res?.topics || []).map(t => ({
+        title: t.title,
+        category: categories.includes(t.category) ? t.category : '其他',
+        difficulty: t.difficulty || (genDifficulty === 'beginner' ? '初级' : genDifficulty === 'advanced' ? '高级' : '中级'),
+      }))
+      if (topics.length > 0) {
+        setAllTopics(prev => [...prev, ...topics])
+        setSelectedTopic(topics[0].title)
+        setShowBank(true)
+        toast(`已生成 ${topics.length} 个话题并加入题库`, 'success')
+      } else {
+        toast('生成结果为空，请稍后重试', 'warning')
+      }
+    } catch (err: any) {
+      toast(err?.message || '生成失败，请稍后重试', 'error')
+    } finally {
+      setGenLoading(false)
+    }
+  }
+
+  const applyCustomTopic = () => {
+    if (!customTopic.trim()) {
+      toast('请输入自定义话题', 'warning')
+      return
+    }
+    const t = { title: customTopic.trim(), category: '自定义', difficulty: '自定义' }
+    setAllTopics(prev => [...prev, t])
+    setSelectedTopic(t.title)
+    setCustomTopic('')
+    toast('已使用自定义话题', 'success')
+  }
+
+  const filteredTopics = allTopics.filter(t => {
+    const byCat = filterCategory === '全部' || !filterCategory || t.category === filterCategory
+    const byDiff = filterDifficulty === '全部' || !filterDifficulty || t.difficulty === filterDifficulty
+    return byCat && byDiff
+  })
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -466,20 +525,23 @@ function PresentationView() {
           <>
             <Card>
               <CardHeader>
-                <div className="flex items-center gap-2">
-                  <Presentation className="w-5 h-5 text-purple-500" />
-                  <CardTitle>今日 Presentation 话题</CardTitle>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Presentation className="w-5 h-5 text-purple-500" />
+                    <CardTitle>今日 Presentation 话题</CardTitle>
+                  </div>
+                  <span className="text-xs text-gray-400">{todayLabel()} 每日更新</span>
                 </div>
               </CardHeader>
               <CardContent>
                 <div className="p-4 bg-purple-50 rounded-xl mb-4">
                   <div className="flex items-center gap-2 mb-2">
-                    <Badge variant="primary">{PRESENTATION_TOPICS[0].category}</Badge>
-                    <Badge variant={PRESENTATION_TOPICS[0].difficulty === '高级' ? 'danger' : PRESENTATION_TOPICS[0].difficulty === '中级' ? 'warning' : 'success'}>
-                      {PRESENTATION_TOPICS[0].difficulty}
+                    <Badge variant="primary">{todayTopic.category}</Badge>
+                    <Badge variant={todayTopic.difficulty === '高级' ? 'danger' : todayTopic.difficulty === '中级' ? 'warning' : 'success'}>
+                      {todayTopic.difficulty}
                     </Badge>
                   </div>
-                  <p className="text-gray-800 font-medium">{PRESENTATION_TOPICS[0].title}</p>
+                  <p className="text-gray-800 font-medium">{todayTopic.title}</p>
                 </div>
                 <div className="mb-4">
                   <div className="flex items-center justify-between mb-1.5">
@@ -494,7 +556,7 @@ function PresentationView() {
                   />
                 </div>
                 <div className="flex gap-2">
-                  <Button size="lg" className="flex-1" onClick={() => { setSelectedTopic(PRESENTATION_TOPICS[0].title); setCountdown(prepTime); setPhase('prepare') }}>
+                  <Button size="lg" className="flex-1" onClick={() => { setSelectedTopic(todayTopic.title); setCountdown(prepTime); setPhase('prepare') }}>
                     <Clock className="w-4 h-4" />
                     开始准备 ({prepTime}s)
                   </Button>
@@ -502,6 +564,59 @@ function PresentationView() {
                     <BookOpen className="w-4 h-4" />
                     题库
                   </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* AI 生成 / 自定义话题 */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-amber-500" />
+                  <CardTitle>自定义练习话题</CardTitle>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-sm font-medium text-gray-700 mb-1.5 block">AI 生成话题（按主题方向 + 难度）</label>
+                    <div className="flex gap-2">
+                      <input
+                        value={genTheme}
+                        onChange={(e) => setGenTheme(e.target.value)}
+                        placeholder="主题方向，如：环境保护 / artificial intelligence / 校园生活"
+                        className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-amber-400"
+                      />
+                      <select
+                        value={genDifficulty}
+                        onChange={(e) => setGenDifficulty(e.target.value)}
+                        className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:border-amber-400"
+                      >
+                        <option value="beginner">初级</option>
+                        <option value="intermediate">中级</option>
+                        <option value="advanced">高级</option>
+                      </select>
+                      <Button onClick={handleGenerateTopics} disabled={genLoading || !genTheme.trim()}>
+                        {genLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                        生成
+                      </Button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium text-gray-700 mb-1.5 block">或直接输入自定义话题</label>
+                    <div className="flex gap-2">
+                      <input
+                        value={customTopic}
+                        onChange={(e) => setCustomTopic(e.target.value)}
+                        placeholder="Describe a tradition in your hometown..."
+                        className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400"
+                      />
+                      <Button variant="outline" onClick={applyCustomTopic} disabled={!customTopic.trim()}>
+                        <Plus className="w-4 h-4" />
+                        使用
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -519,7 +634,7 @@ function PresentationView() {
                 </CardHeader>
                 <CardContent>
                   {/* 分类筛选 */}
-                  <div className="flex gap-1.5 flex-wrap mb-4">
+                  <div className="flex gap-1.5 flex-wrap mb-2">
                     {categories.map(c => (
                       <button
                         key={c}
@@ -535,11 +650,28 @@ function PresentationView() {
                       </button>
                     ))}
                   </div>
+                  {/* 难度筛选 */}
+                  <div className="flex gap-1.5 flex-wrap mb-4">
+                    {difficulties.map(d => (
+                      <button
+                        key={d}
+                        onClick={() => setFilterDifficulty(d)}
+                        className={cn(
+                          'px-2.5 py-1 text-xs font-medium rounded-full transition-all',
+                          (filterDifficulty === d || (!filterDifficulty && d === '全部'))
+                            ? 'bg-purple-600 text-white'
+                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        )}
+                      >
+                        {d}
+                      </button>
+                    ))}
+                  </div>
                   {/* 话题列表 */}
                   <div className="space-y-2 max-h-96 overflow-y-auto">
                     {filteredTopics.map((topic, i) => (
                       <div
-                        key={i}
+                        key={`${topic.title}-${i}`}
                         onClick={() => {
                           setSelectedTopic(topic.title)
                           setShowBank(false)
@@ -567,7 +699,7 @@ function PresentationView() {
           </>
         )}
 
-        {phase !== 'topic' && selectedTopic !== PRESENTATION_TOPICS[0].title && (
+        {phase !== 'topic' && selectedTopic !== todayTopic.title && (
           <div className="p-3 bg-purple-50 rounded-lg">
             <p className="text-xs text-purple-400 mb-1">当前话题</p>
             <p className="text-sm text-gray-700">{selectedTopic}</p>
@@ -2010,6 +2142,41 @@ Rules (VERY IMPORTANT):
   )
 }
 
+// ===== 复述素材题库 =====
+const RETELLING_MATERIALS: { title: string; script: string; key_points: string[] }[] = [
+  {
+    title: 'The Impact of Social Media on Interpersonal Communication',
+    script: 'Social media has fundamentally changed how people maintain relationships. Instead of face-to-face conversations, many now rely on instant messaging and video calls. Researchers have found that while social media helps people stay connected across long distances, it can also reduce the quality of communication. Online interactions often lack emotional cues such as tone of voice and body language. As a result, misunderstandings become more common. Experts suggest balancing online and offline communication to keep relationships healthy.',
+    key_points: ['社交媒体改变了人际关系的维系方式', '跨地域连接 vs 沟通质量下降', '线上交流缺少情感线索（语气/肢体语言）', '误解增多', '专家建议平衡线上与线下沟通'],
+  },
+  {
+    title: 'Urban Green Spaces and Public Health',
+    script: 'Cities around the world are investing in parks and green spaces, and for good reason. Studies show that access to nature reduces stress and improves mental health. People who live near parks exercise more often and report higher life satisfaction. Green spaces also cool down cities during hot summers and absorb rainwater, reducing floods. However, not all neighborhoods have equal access to these benefits. Planners argue that fair distribution of green space should be a public health priority.',
+    key_points: ['城市投资绿地的原因', '自然接触降低压力、改善心理健康', '绿地调节气温与吸收雨水', '不同社区绿地资源不平等', '公平分配应成为公共健康优先事项'],
+  },
+  {
+    title: 'The Rise of Remote Work',
+    script: 'The pandemic accelerated a shift toward remote work that continues today. Companies discovered that many jobs can be done effectively from home, saving on office costs. Workers enjoy flexibility and skip long commutes, gaining more time for family and hobbies. Yet remote work brings challenges too. Some employees feel isolated and find it hard to separate work from personal life. Many organizations now adopt hybrid models, combining home and office days to capture the benefits of both.',
+    key_points: ['疫情加速远程办公普及', '企业节省成本、员工获得灵活性与通勤时间', '挑战：孤独感与工作生活边界模糊', '混合办公模式成为主流方案'],
+  },
+  {
+    title: 'How Sleep Affects Learning',
+    script: 'Sleep plays a critical role in memory formation. During deep sleep, the brain replays and strengthens the connections formed while studying. Students who sleep well after learning remember significantly more than those who stay up all night. Sleep deprivation also harms attention and problem-solving abilities the next day. Researchers recommend seven to nine hours of sleep for adults, and consistent sleep schedules matter as much as duration. In short, a good night of sleep is part of effective studying, not a waste of time.',
+    key_points: ['睡眠对记忆形成的关键作用', '深睡期大脑重放并强化学习连接', '熬夜降低记忆与次日注意力', '建议 7-9 小时与规律作息', '睡眠是高效学习的一部分'],
+  },
+  {
+    title: 'Ocean Plastic Pollution',
+    script: 'Every year, millions of tons of plastic enter the oceans, threatening marine life. Sea animals mistake plastic pieces for food, and microplastics have now been found from the ocean surface to the deepest trenches. The problem originates mostly from land: poorly managed waste and single-use products. Solutions require action at several levels. Individuals can reduce single-use plastics, while governments can improve recycling systems and hold producers responsible. International agreements are also being negotiated to limit plastic pollution at its source.',
+    key_points: ['每年数百万吨塑料入海', '海洋生物误食与微塑料遍布海洋各层', '主要来源：陆地垃圾管理与一次性产品', '解决需要个人/政府/国际协议多层面行动'],
+  },
+  {
+    title: 'The Economics of Museums',
+    script: 'Museums face a constant tension between preserving collections and attracting visitors. Maintaining proper temperature and humidity costs a great deal of money, yet ticket sales rarely cover these expenses. Many museums depend on donations, government funding, and special exhibitions that draw crowds. Some have turned to digital technologies, offering virtual tours that reach global audiences. Critics worry that chasing popularity could turn museums into entertainment venues, while supporters argue that engagement ensures public funding survives for future generations.',
+    key_points: ['博物馆在保护藏品与吸引观众间的张力', '维护成本高而门票收入不足', '依赖捐赠、政府资金与特展', '数字化虚拟展览扩大受众', '争议：娱乐化 vs 公众参与保障资金'],
+  },
+]
+
+
 // ===== Retelling View =====
 function RetellingView() {
   const { toast } = useToast()
@@ -2017,6 +2184,66 @@ function RetellingView() {
   const [settings, setSettings] = useState({ speed: 1.0, repeat: 1, length: 'medium' })
   const [result, setResult] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
+  // 素材 = 内置题库（每日轮换）+ 本次会话 AI 生成的素材
+  const [materials, setMaterials] = useState(RETELLING_MATERIALS)
+  const todayIdx = dailyIndex(RETELLING_MATERIALS.length)
+  const [currentIdx, setCurrentIdx] = useState(todayIdx)
+  const material = materials[currentIdx] || materials[0]
+  // AI 生成素材
+  const [genTopic, setGenTopic] = useState('')
+  const [genLoading, setGenLoading] = useState(false)
+  // 真实 TTS 播放状态
+  const [playRound, setPlayRound] = useState(0)   // 当前是第几遍
+  const [playing, setPlaying] = useState(false)
+  const [elapsed, setElapsed] = useState(0)       // 秒，用于进度条
+
+  // 预估单遍时长（~140 词/分钟 × 语速）
+  const estSeconds = Math.max(5, Math.round((material.script.split(/\s+/).length / 140) * 60 / settings.speed))
+
+  useEffect(() => {
+    if (!playing) return
+    const t = setInterval(() => setElapsed(e => e + 1), 1000)
+    return () => clearInterval(t)
+  }, [playing])
+
+  const playOneRound = (round: number) => {
+    setPlaying(true)
+    setElapsed(0)
+    const ok = speak({
+      text: material.script,
+      lang: 'en-US',
+      rate: settings.speed,
+      onEnd: () => {
+        if (round < settings.repeat) {
+          setPlayRound(round + 1)
+          playOneRound(round + 1)
+        } else {
+          setPlaying(false)
+          toast('播放完毕，可以开始复述了', 'success')
+        }
+      },
+      onError: () => {
+        setPlaying(false)
+        toast('语音播放失败，请检查浏览器语音支持', 'error')
+      },
+    })
+    if (!ok) {
+      setPlaying(false)
+      toast('当前浏览器不支持语音合成，请换用 Chrome/Edge', 'error')
+    }
+  }
+
+  const handleStartListening = () => {
+    setPhase('listening')
+    setPlayRound(1)
+    // 稍等一拍再播，让界面先切过去
+    setTimeout(() => playOneRound(1), 300)
+  }
+
+  const handleStopPlayback = () => {
+    stopTTS()
+    setPlaying(false)
+  }
 
   const handleEvaluate = async (transcript?: string) => {
     setPhase('loading')
@@ -2024,8 +2251,9 @@ function RetellingView() {
     try {
       const res = await speakingApi.evaluate({
         type: 'retelling',
-        topic: 'The Impact of Social Media on Interpersonal Communication',
+        topic: material.title,
         transcript: transcript || '',
+        reference_text: material.script,
       })
       setResult(res)
       setPhase('result')
@@ -2035,22 +2263,100 @@ function RetellingView() {
     }
   }
 
+  // AI 生成复述素材
+  const handleGenerateMaterial = async () => {
+    if (!genTopic.trim()) {
+      toast('请先输入素材主题', 'warning')
+      return
+    }
+    setGenLoading(true)
+    try {
+      const res = await speakingApi.generateRetelling({ topic: genTopic.trim(), length: settings.length })
+      if (res?.script) {
+        const m = {
+          title: res.title || genTopic,
+          script: res.script,
+          key_points: res.key_points || [],
+        }
+        setMaterials(prev => [...prev, m])
+        setCurrentIdx(materials.length) // 选中新生成的
+        setGenTopic('')
+        toast('素材已生成并选中', 'success')
+      } else {
+        toast('生成结果为空，请稍后重试', 'warning')
+      }
+    } catch (err: any) {
+      toast(err?.message || '生成失败，请稍后重试', 'error')
+    } finally {
+      setGenLoading(false)
+    }
+  }
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <div className="space-y-4">
         {phase === 'settings' && (
           <Card>
             <CardHeader>
-              <div className="flex items-center gap-2">
-                <Repeat className="w-5 h-5 text-indigo-500" />
-                <CardTitle>复述练习设置</CardTitle>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Repeat className="w-5 h-5 text-indigo-500" />
+                  <CardTitle>复述练习设置</CardTitle>
+                </div>
+                <span className="text-xs text-gray-400">{todayLabel()} 每日更新</span>
               </div>
             </CardHeader>
             <CardContent>
-              <div className="mb-4 p-3 bg-gray-50 rounded-lg">
-                <p className="text-sm text-gray-500 mb-2">当前素材</p>
-                <p className="text-sm font-medium text-gray-800">AI生成模拟音频：The Impact of Social Media on Interpersonal Communication</p>
-                <Badge variant="primary" className="mt-2">AI生成</Badge>
+              {/* 今日素材（按日期轮换） */}
+              <div className="mb-4 p-3 bg-indigo-50 border border-indigo-100 rounded-lg">
+                <p className="text-xs text-indigo-400 mb-1">今日素材 · 第 {todayIdx + 1}/{RETELLING_MATERIALS.length} 篇</p>
+                <p className="text-sm font-medium text-gray-800">{RETELLING_MATERIALS[todayIdx]?.title}</p>
+                <p className="text-xs text-gray-400 mt-1">
+                  约 {RETELLING_MATERIALS[todayIdx]?.script.split(/\s+/).length} 词 · 预计 {Math.max(5, Math.round((RETELLING_MATERIALS[todayIdx]?.script.split(/\s+/).length || 100) / 140 * 60))} 秒
+                </p>
+              </div>
+
+              {/* 素材选择 */}
+              <div className="mb-4">
+                <label className="text-sm font-medium text-gray-700 mb-1.5 block">选择素材（当前 {currentIdx + 1}/{materials.length}）</label>
+                <div className="space-y-1.5 max-h-44 overflow-y-auto">
+                  {materials.map((m, i) => (
+                    <button
+                      key={`${m.title}-${i}`}
+                      onClick={() => setCurrentIdx(i)}
+                      className={cn(
+                        'w-full text-left p-2.5 rounded-lg border transition-all text-sm',
+                        currentIdx === i
+                          ? 'border-indigo-400 bg-indigo-50 text-indigo-700 font-medium'
+                          : 'border-gray-100 hover:border-indigo-300 text-gray-600'
+                      )}
+                    >
+                      <span className="flex items-center gap-2">
+                        {i === todayIdx && <Badge variant="primary">今日</Badge>}
+                        {i >= RETELLING_MATERIALS.length && <Badge variant="warning">AI生成</Badge>}
+                        {m.title}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* AI 生成素材 */}
+              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <label className="text-sm font-medium text-gray-700 mb-1.5 block">AI 生成自定义素材</label>
+                <div className="flex gap-2">
+                  <input
+                    value={genTopic}
+                    onChange={(e) => setGenTopic(e.target.value)}
+                    placeholder="素材主题，如：ancient trade routes / 城市交通"
+                    className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-amber-400"
+                  />
+                  <Button size="sm" onClick={handleGenerateMaterial} disabled={genLoading || !genTopic.trim()}>
+                    {genLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                    生成
+                  </Button>
+                </div>
+                <p className="mt-1.5 text-xs text-gray-500">按下方「篇幅长度」生成对应长度的短文与复述要点</p>
               </div>
 
               <div className="mb-4">
@@ -2112,20 +2418,27 @@ function RetellingView() {
           <Card>
             <CardContent className="pt-5">
               <div className="flex flex-col items-center py-8">
-                <div className="w-16 h-16 rounded-full bg-indigo-100 flex items-center justify-center mb-4">
+                <div className={cn('w-16 h-16 rounded-full bg-indigo-100 flex items-center justify-center mb-4', playing && 'animate-pulse')}>
                   <Volume2 className="w-8 h-8 text-indigo-500" />
                 </div>
-                <p className="text-sm text-gray-500 mb-4">正在播放音频... 请仔细聆听</p>
+                <p className="text-sm text-gray-500 mb-1">{playing ? '正在播放音频... 请仔细聆听' : '已停止播放'}</p>
+                <p className="text-xs text-gray-400 mb-4">素材：{material.title}</p>
                 <div className="flex items-center gap-2 mb-4">
-                  <Button variant="outline" size="sm" onClick={() => toast('已暂停播放', 'info')}><Pause className="w-3 h-3" />暂停</Button>
-                  <span className="text-sm text-gray-400">第 1/{settings.repeat} 次播放</span>
+                  {playing ? (
+                    <Button variant="outline" size="sm" onClick={handleStopPlayback}><Pause className="w-3 h-3" />停止播放</Button>
+                  ) : (
+                    <Button variant="outline" size="sm" onClick={() => { setPlayRound(1); playOneRound(1) }}>
+                      <Play className="w-3 h-3" />重新播放
+                    </Button>
+                  )}
+                  <span className="text-sm text-gray-400">第 {playRound}/{settings.repeat} 次播放</span>
                 </div>
-                <Progress value={65} className="w-64" />
+                <Progress value={Math.min(100, Math.round((elapsed / estSeconds) * 100))} className="w-64" />
                 <div className="flex justify-between w-64 mt-1 text-xs text-gray-400">
-                  <span>1:18</span>
-                  <span>2:00</span>
+                  <span>{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</span>
+                  <span>预计 {Math.floor(estSeconds / 60)}:{String(estSeconds % 60).padStart(2, '0')}</span>
                 </div>
-                <Button className="mt-6" onClick={() => setPhase('recording')}>
+                <Button className="mt-6" onClick={() => { handleStopPlayback(); setPhase('recording') }}>
                   听完了，开始复述
                 </Button>
               </div>
@@ -2159,10 +2472,30 @@ function RetellingView() {
       </div>
 
       {phase === 'result' && result ? (
-        <ScoreDisplay
-          scores={result.scores || result.score_details || []}
-          feedback={result.feedback || result.ai_feedback || '复述评估完成'}
-        />
+        <div className="space-y-4">
+          <ScoreDisplay
+            scores={result.scores || result.score_details || []}
+            feedback={result.feedback || result.ai_feedback || '复述评估完成'}
+          />
+          {material.key_points?.length > 0 && (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <Lightbulb className="w-5 h-5 text-amber-500" />
+                  <CardTitle>复述要点对照（自评参考）</CardTitle>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <ol className="space-y-1.5 list-decimal list-inside">
+                  {material.key_points.map((p: string, i: number) => (
+                    <li key={i} className="text-sm text-gray-600">{p}</li>
+                  ))}
+                </ol>
+                <p className="mt-3 text-xs text-gray-400">对照以上要点检查自己的复述是否覆盖了主要信息层次</p>
+              </CardContent>
+            </Card>
+          )}
+        </div>
       ) : phase === 'result' && !result ? null : (
         <Card className="flex items-center justify-center min-h-[400px]">
           <div className="text-center">

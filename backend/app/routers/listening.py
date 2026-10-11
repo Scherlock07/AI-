@@ -9,7 +9,7 @@ from app.models.user import User
 from app.models.listening import ListeningMaterial, ListeningExercise
 from app.auth.security import get_current_user
 from app.schemas.listening import ListeningGenerateRequest, ListeningMaterialResponse, ListeningImportRequest
-from app.services.llm_service import generate_listening_script, extract_listening_key_points
+from app.services.llm_service import generate_listening_script, extract_listening_key_points, generate_vocab_exercises, grade_sentence
 from app.services.speech_service import text_to_speech
 
 router = APIRouter(prefix="/api/listening", tags=["听力模块"])
@@ -18,6 +18,38 @@ router = APIRouter(prefix="/api/listening", tags=["听力模块"])
 class KeyPointsRequest(BaseModel):
     script: str
     count: int = 8
+
+
+class VocabExercisesRequest(BaseModel):
+    script: str
+    count: int = 6
+
+
+class SentenceGradeRequest(BaseModel):
+    word: str
+    sentence: str
+
+
+@router.post("/vocab-exercises")
+async def get_vocab_exercises(req: VocabExercisesRequest, user: User = Depends(get_current_user)):
+    """AI 基于文本生成词汇三件套练习（选词填空/释义匹配/造句）"""
+    if not req.script or not req.script.strip():
+        raise HTTPException(400, "缺少源文本")
+    if len(req.script) > 60000:
+        raise HTTPException(400, "文本过长")
+    if not (3 <= req.count <= 10):
+        req.count = 6
+    return await generate_vocab_exercises(req.script, req.count)
+
+
+@router.post("/vocab-grade")
+async def grade_vocab_sentence(req: SentenceGradeRequest, user: User = Depends(get_current_user)):
+    """AI 评阅造句练习"""
+    if not req.word.strip() or not req.sentence.strip():
+        raise HTTPException(400, "缺少词汇或句子")
+    if len(req.sentence) > 2000:
+        raise HTTPException(400, "句子过长")
+    return await grade_sentence(req.word, req.sentence)
 
 
 @router.post("/key-points")

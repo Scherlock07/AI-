@@ -1401,11 +1401,32 @@ function KeyPointsView({ sentences, accent }: { sentences: string[]; accent: str
 function VocabPracticeView() {
   const { toast } = useToast()
 
-  const vocabItems = [
-    { word: 'unprecedented', phonetic: '/ʌnˈpresɪdentɪd/', pos: 'adj.', def: '前所未有的', example: 'The situation is unprecedented in modern history.', context: '听力原文：...unprecedented challenges that climate change poses...' },
-    { word: 'precipitation', phonetic: '/prɪˌsɪpɪˈteɪʃn/', pos: 'n.', def: '降水，沉淀', example: 'Changing precipitation patterns affect agriculture.', context: '听力原文：...changing precipitation patterns...' },
-    { word: 'infrastructure', phonetic: '/ˈɪnfrəstrʌktʃər/', pos: 'n.', def: '基础设施', example: 'The city needs to upgrade its infrastructure.', context: '听力原文：...rethink traditional infrastructure.' },
-  ]
+  // ===== 源文本输入 =====
+  const [source, setSource] = useState('')
+  const [count, setCount] = useState(6)
+  const [loading, setLoading] = useState(false)
+  const [exercises, setExercises] = useState<{
+    cloze: { sentence: string; options: string[]; answer: string }[]
+    matching: { word: string; definition: string }[]
+    sentence_words: { word: string; hint: string }[]
+  } | null>(null)
+
+  const [exerciseTab, setExerciseTab] = useState<'cloze' | 'matching' | 'sentence'>('cloze')
+
+  // ===== 选词填空 =====
+  const [clozePicks, setClozePicks] = useState<(string | null)[]>([])
+  const [clozeChecked, setClozeChecked] = useState(false)
+
+  // ===== 释义匹配 =====
+  const [matchDefs, setMatchDefs] = useState<string[]>([]) // 打乱后的释义选项
+  const [matchPicks, setMatchPicks] = useState<Record<string, string>>({})
+  const [matchChecked, setMatchChecked] = useState(false)
+
+  // ===== 造句练习 =====
+  const [sentenceWord, setSentenceWord] = useState('')
+  const [sentenceText, setSentenceText] = useState('')
+  const [sentenceResult, setSentenceResult] = useState<any>(null)
+  const [sentenceLoading, setSentenceLoading] = useState(false)
 
   const handlePronounce = (word: string) => {
     speak({
@@ -1416,58 +1437,305 @@ function VocabPracticeView() {
     })
   }
 
+  const shuffle = <T,>(arr: T[]): T[] => {
+    const a = [...arr]
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[a[i], a[j]] = [a[j], a[i]]
+    }
+    return a
+  }
+
+  const handleGenerate = async () => {
+    if (!source.trim() || source.trim().split(/\s+/).length < 30) {
+      toast('请粘贴至少 30 词的英文文本（可用「生成练习」页生成的听力脚本）', 'warning')
+      return
+    }
+    setLoading(true)
+    try {
+      const res = await listeningApi.vocabExercises({ script: source.trim(), count })
+      if (!res || (!res.cloze?.length && !res.matching?.length)) {
+        toast('生成结果为空，请稍后重试', 'warning')
+        return
+      }
+      setExercises(res)
+      setExerciseTab('cloze')
+      setClozePicks(new Array(res.cloze?.length || 0).fill(null))
+      setClozeChecked(false)
+      setMatchDefs(shuffle((res.matching || []).map(m => m.definition)))
+      setMatchPicks({})
+      setMatchChecked(false)
+      setSentenceWord(res.sentence_words?.[0]?.word || '')
+      setSentenceText('')
+      setSentenceResult(null)
+      toast('练习已生成', 'success')
+    } catch (err: any) {
+      toast(err?.message || '生成失败，请稍后重试', 'error')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleGradeSentence = async () => {
+    if (!sentenceWord || !sentenceText.trim()) {
+      toast('请选择词汇并输入你的造句', 'warning')
+      return
+    }
+    setSentenceLoading(true)
+    setSentenceResult(null)
+    try {
+      const res = await listeningApi.vocabGrade({ word: sentenceWord, sentence: sentenceText.trim() })
+      setSentenceResult(res)
+    } catch (err: any) {
+      toast(err?.message || '评阅失败，请稍后重试', 'error')
+    } finally {
+      setSentenceLoading(false)
+    }
+  }
+
+  const clozeCorrect = exercises?.cloze.filter((c, i) => clozePicks[i] === c.answer).length || 0
+
   return (
     <div className="space-y-4">
+      {/* 源文本输入 */}
       <Card>
         <CardHeader>
           <CardTitle>语境化词汇练习</CardTitle>
-          <p className="text-sm text-gray-400 mt-1">基于当前听力素材自动提取的关键词汇</p>
+          <p className="text-sm text-gray-400 mt-1">
+            粘贴任意英文文本（如听力脚本/阅读文章），AI 提取关键词汇并生成三种练习
+          </p>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            {vocabItems.map((v) => (
-              <div key={v.word} className="p-4 border border-gray-100 rounded-xl hover:border-indigo-200 transition-colors">
-                <div className="flex items-start justify-between mb-2">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-lg font-bold text-gray-900">{v.word}</span>
-                      <span className="text-sm text-gray-400">{v.phonetic}</span>
-                      <Badge variant="default">{v.pos}</Badge>
-                    </div>
-                    <p className="text-sm text-gray-600 mt-1">{v.def}</p>
-                  </div>
-                  <Button size="sm" variant="ghost" onClick={() => handlePronounce(v.word)}>
-                    <Volume2 className="w-4 h-4" />
-                    发音
-                  </Button>
-                </div>
-                <div className="p-2 bg-gray-50 rounded-lg">
-                  <p className="text-sm text-gray-600 italic">"{v.example}"</p>
-                </div>
-                <div className="mt-2 p-2 bg-indigo-50 rounded-lg">
-                  <p className="text-xs text-gray-500">
-                    <span className="font-medium text-indigo-600">语境：</span>
-                    {v.context}
-                  </p>
-                </div>
+            <textarea
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+              placeholder="粘贴英文文本...&#10;提示：可在「生成练习」页生成听力素材后，把脚本粘贴到这里"
+              rows={5}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400 resize-none"
+            />
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-gray-600">词汇数量</label>
+                <select
+                  value={count}
+                  onChange={(e) => setCount(parseInt(e.target.value))}
+                  className="px-2 py-1.5 text-sm border border-gray-200 rounded-lg bg-white"
+                >
+                  {[4, 5, 6, 8, 10].map(n => <option key={n} value={n}>{n} 个</option>)}
+                </select>
               </div>
-            ))}
-          </div>
-
-          <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {[
-              { title: '选词填空', desc: '从列表中选择正确单词填入句子' },
-              { title: '释义匹配', desc: '将单词与正确释义配对' },
-              { title: '造句练习', desc: '用指定词汇造句，AI评分' },
-            ].map((ex) => (
-              <button key={ex.title} onClick={() => toast(`${ex.title}练习开发中`, 'info')} className="p-3 border border-gray-100 rounded-xl hover:bg-indigo-50 hover:border-indigo-200 transition-colors text-left">
-                <h4 className="text-sm font-medium text-gray-800">{ex.title}</h4>
-                <p className="text-xs text-gray-400 mt-0.5">{ex.desc}</p>
-              </button>
-            ))}
+              <Button onClick={handleGenerate} disabled={loading || !source.trim()}>
+                {loading ? <LoadingSpinner size="sm" /> : <Sparkles className="w-4 h-4" />}
+                {loading ? 'AI 生成中...' : '生成练习'}
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
+
+      {exercises && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <CardTitle>词汇练习</CardTitle>
+              <div className="flex gap-1 bg-gray-100 p-1 rounded-xl">
+                {[
+                  { key: 'cloze' as const, label: '选词填空' },
+                  { key: 'matching' as const, label: '释义匹配' },
+                  { key: 'sentence' as const, label: '造句练习' },
+                ].map(t => (
+                  <button
+                    key={t.key}
+                    onClick={() => setExerciseTab(t.key)}
+                    className={cn(
+                      'px-4 py-1.5 rounded-lg text-sm font-medium transition-all',
+                      exerciseTab === t.key ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700',
+                    )}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {/* ===== 选词填空 ===== */}
+            {exerciseTab === 'cloze' && (
+              <div className="space-y-4">
+                {exercises.cloze?.map((c, i) => (
+                  <div key={i} className="p-4 border border-gray-100 rounded-xl">
+                    <p className="text-sm text-gray-800 mb-3">
+                      {i + 1}. {c.sentence}
+                    </p>
+                    <div className="flex gap-2 flex-wrap">
+                      {c.options.map((opt, j) => {
+                        const picked = clozePicks[i] === opt
+                        const isAnswer = opt === c.answer
+                        return (
+                          <button
+                            key={`${opt}-${j}`}
+                            onClick={() => { if (!clozeChecked) setClozePicks(prev => prev.map((p, k) => k === i ? opt : p)) }}
+                            className={cn(
+                              'px-3 py-1.5 text-sm rounded-lg border transition-all',
+                              !clozeChecked && picked && 'border-indigo-400 bg-indigo-50 text-indigo-700 font-medium',
+                              !clozeChecked && !picked && 'border-gray-200 hover:border-indigo-300 text-gray-600',
+                              clozeChecked && isAnswer && 'border-green-400 bg-green-50 text-green-700 font-medium',
+                              clozeChecked && picked && !isAnswer && 'border-red-400 bg-red-50 text-red-600',
+                              clozeChecked && !picked && !isAnswer && 'border-gray-100 text-gray-400',
+                            )}
+                          >
+                            {opt}
+                          </button>
+                        )
+                      })}
+                    </div>
+                    {clozeChecked && clozePicks[i] !== c.answer && (
+                      <p className="mt-2 text-xs text-green-600">正确答案：{c.answer}</p>
+                    )}
+                  </div>
+                ))}
+                <div className="flex items-center gap-3">
+                  {!clozeChecked ? (
+                    <Button onClick={() => setClozeChecked(true)} disabled={clozePicks.some(p => !p)}>
+                      对答案
+                    </Button>
+                  ) : (
+                    <>
+                      <span className="text-sm font-medium text-gray-700">
+                        得分：{clozeCorrect} / {exercises.cloze.length}
+                      </span>
+                      <Button variant="outline" onClick={() => { setClozePicks(new Array(exercises.cloze.length).fill(null)); setClozeChecked(false) }}>
+                        重做
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ===== 释义匹配 ===== */}
+            {exerciseTab === 'matching' && (
+              <div className="space-y-4">
+                {exercises.matching?.map((m, i) => {
+                  const picked = matchPicks[m.word]
+                  const correct = picked === m.definition
+                  return (
+                    <div key={m.word} className="flex items-center gap-3 p-3 border border-gray-100 rounded-xl">
+                      <button
+                        onClick={() => handlePronounce(m.word)}
+                        className="flex items-center gap-1 text-sm font-medium text-gray-900 hover:text-indigo-600"
+                        title="朗读单词"
+                      >
+                        <Volume2 className="w-3.5 h-3.5 text-gray-400" />
+                        {m.word}
+                      </button>
+                      <span className="text-gray-300">→</span>
+                      <select
+                        value={picked || ''}
+                        disabled={matchChecked}
+                        onChange={(e) => setMatchPicks(prev => ({ ...prev, [m.word]: e.target.value }))}
+                        className={cn(
+                          'flex-1 px-3 py-1.5 text-sm border rounded-lg bg-white',
+                          matchChecked
+                            ? correct ? 'border-green-400 text-green-700' : 'border-red-400 text-red-600'
+                            : 'border-gray-200 focus:border-indigo-400',
+                        )}
+                      >
+                        <option value="">选择释义…</option>
+                        {matchDefs.map((d, j) => <option key={`${d}-${j}`} value={d}>{d}</option>)}
+                      </select>
+                      {matchChecked && !correct && (
+                        <span className="text-xs text-green-600 whitespace-nowrap">应为：{m.definition}</span>
+                      )}
+                    </div>
+                  )
+                })}
+                <div className="flex items-center gap-3">
+                  {!matchChecked ? (
+                    <Button onClick={() => setMatchChecked(true)} disabled={Object.keys(matchPicks).length < (exercises.matching?.length || 0)}>
+                      对答案
+                    </Button>
+                  ) : (
+                    <>
+                      <span className="text-sm font-medium text-gray-700">
+                        得分：{exercises.matching.filter(m => matchPicks[m.word] === m.definition).length} / {exercises.matching.length}
+                      </span>
+                      <Button variant="outline" onClick={() => { setMatchPicks({}); setMatchChecked(false) }}>
+                        重做
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ===== 造句练习 ===== */}
+            {exerciseTab === 'sentence' && (
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm font-medium text-gray-700 mb-2 block">选择要练习的词汇</label>
+                  <div className="flex gap-2 flex-wrap">
+                    {exercises.sentence_words?.map((s) => (
+                      <button
+                        key={s.word}
+                        onClick={() => { setSentenceWord(s.word); setSentenceResult(null) }}
+                        title={s.hint}
+                        className={cn(
+                          'px-3 py-1.5 text-sm rounded-lg border transition-all',
+                          sentenceWord === s.word
+                            ? 'border-indigo-400 bg-indigo-50 text-indigo-700 font-medium'
+                            : 'border-gray-200 hover:border-indigo-300 text-gray-600',
+                        )}
+                      >
+                        {s.word}
+                      </button>
+                    ))}
+                  </div>
+                  {sentenceWord && (
+                    <p className="mt-2 text-xs text-gray-400">
+                      提示：{exercises.sentence_words.find(s => s.word === sentenceWord)?.hint}
+                    </p>
+                  )}
+                </div>
+                <textarea
+                  value={sentenceText}
+                  onChange={(e) => setSentenceText(e.target.value)}
+                  placeholder={sentenceWord ? `用 "${sentenceWord}" 造一个完整的英文句子...` : '先选择上方词汇'}
+                  disabled={!sentenceWord}
+                  rows={3}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400 resize-none"
+                />
+                <Button onClick={handleGradeSentence} disabled={sentenceLoading || !sentenceWord || !sentenceText.trim()}>
+                  {sentenceLoading ? <LoadingSpinner size="sm" /> : <Sparkles className="w-4 h-4" />}
+                  {sentenceLoading ? 'AI 评阅中...' : '提交 AI 评阅'}
+                </Button>
+
+                {sentenceResult && (
+                  <div className="p-4 border rounded-xl space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className={cn('text-2xl font-bold', sentenceResult.score >= 80 ? 'text-green-600' : sentenceResult.score >= 60 ? 'text-amber-500' : 'text-red-500')}>
+                        {sentenceResult.score}
+                      </span>
+                      <span className="text-sm text-gray-400">/ 100</span>
+                      <Badge variant={sentenceResult.correct_usage ? 'success' : 'danger'}>
+                        {sentenceResult.correct_usage ? '词汇用法正确' : '词汇用法有误'}
+                      </Badge>
+                    </div>
+                    <p className="text-sm text-gray-700">{sentenceResult.feedback}</p>
+                    {sentenceResult.improved && (
+                      <div className="p-2 bg-indigo-50 rounded-lg">
+                        <p className="text-xs text-indigo-500 mb-0.5">改进建议</p>
+                        <p className="text-sm text-gray-700 italic">{sentenceResult.improved}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }

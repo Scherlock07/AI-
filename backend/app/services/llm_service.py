@@ -631,21 +631,51 @@ async def analyze_single_sentence(sentence: str, difficulty: str = "intermediate
 
 # ========== 阅读分析 ==========
 
+# 阅读分析的三档「分析深度」指令（同一文本按学习者水平输出不同深度的分析）
+_READING_DEPTH_GUIDES = {
+    "beginner": """【分析深度：初级（概览层）】
+- summary：2-3 句话的通俗摘要，避免术语
+- key_points：3 条核心要点，每条一句话
+- structure：仅一层（主旨 + 各段大意）
+- difficult_sentences：最多 1 句，解析用最基础的句法术语（主谓宾），给出直白翻译
+- vocabulary：6 个基础高频词/短语，释义用最简单中文
+- cultural_notes：最多 1-2 条浅显背景注释""",
+    "intermediate": """【分析深度：中级（标准层）】
+- summary：3-5 句话摘要，概括论证脉络
+- key_points：4-5 条要点，区分论点与论据
+- structure：两层（主旨 → 论点 → 论据/例证）
+- difficult_sentences：2-3 句，标注从句类型、修饰关系，给出翻译
+- vocabulary：10 个四级难度词汇，附音标与例句
+- cultural_notes：2-3 条背景注释，说明对理解文意的影响""",
+    "advanced": """【分析深度：高级（深度层）】
+- summary：5 句以上摘要，最后一句加入批判性视角（论证方式/作者立场评估）
+- key_points：5-6 条要点，注明要点之间的逻辑关系（因果/对比/递进）
+- structure：三层完整论证链（主旨 → 论点 → 论据 → 细节证据）
+- difficult_sentences：3-5 句，除句法外标注修辞手法与逻辑连接词的功能
+- vocabulary：12 个以上六级/学术词汇，例句优先取自原文语境
+- cultural_notes：3-5 条，包含术语源流与 1-2 个批判性思考问题""",
+}
+
+
 async def analyze_reading(content: str, difficulty: str = "intermediate") -> dict:
-    """AI 阅读文本分析"""
+    """AI 阅读文本分析（difficulty 为「分析深度」档位：beginner/intermediate/advanced，
+    同一文本在不同档位下输出不同深度的分析，而非相同结果）"""
     if not settings.LLM_API_KEY:
         return _mock_reading_analysis(content)
     system_msg = (
         "你是一位英语阅读教学专家，擅长文本分析、长难句解析和文化背景注释。"
         "请对给定文本进行深度分析。"
     )
-    user_msg = f"""请分析以下英语阅读文本（难度: {difficulty}）：
+    depth_guide = _READING_DEPTH_GUIDES.get(difficulty, _READING_DEPTH_GUIDES["intermediate"])
+    user_msg = f"""请分析以下英语阅读文本（分析深度档位: {difficulty}）：
 
 {content[:5000]}
 
+{depth_guide}
+
 请提供以下分析，严格按 JSON 格式输出：
 {{
-  "summary": "文章摘要（3-5句话）",
+  "summary": "文章摘要",
   "key_points": ["要点1", "要点2", "要点3"],
   "structure": [
     {{
@@ -669,7 +699,10 @@ async def analyze_reading(content: str, difficulty: str = "intermediate") -> dic
   "vocabulary": [
     {{"word": "单词", "phonetic": "/fəˈnetɪk/", "partOfSpeech": "n.", "definition": "释义", "example": "例句"}}
   ]
-}}"""
+}}
+
+【重要】不同分析深度档位的输出必须有明显区分：概览层简明、标准层完整、深度层精细，
+不要对同一文本在不同档位输出雷同的分析。"""
 
     result, _hit = await cached_json(
         "analyze_reading",
@@ -1171,6 +1204,353 @@ async def recommend_learning_path(ability_radar: list[dict], weak_points: list[s
 
 
 # ========== Mock 数据（无 API Key 时使用） ==========
+
+# ========== 练习内容生成（阅读文本 / 口语话题 / 复述素材 / 写作题目 / 词汇练习） ==========
+
+async def generate_reading_text(topic: str, difficulty: str, length: str = "medium") -> dict:
+    """AI 按主题+难度生成阅读文本（难度真正作用于文本本身的词汇与句法复杂度）"""
+    if not settings.LLM_API_KEY:
+        return _mock_generated_text(topic, difficulty, length)
+
+    length_spec = {
+        "short": ("约 150-200 词（2-3 段）", 180),
+        "medium": ("约 300-400 词（4-5 段）", 350),
+        "long": ("约 500-650 词（6-8 段）", 570),
+    }.get(length, ("约 300-400 词（4-5 段）", 350))
+    difficulty_spec = {
+        "beginner": "高中难度：高频词汇为主，句子平均 12 词以内，无复杂从句嵌套",
+        "intermediate": "四级难度：含常见学术词汇，可有一层从句，句式有变化",
+        "advanced": "六级/考研难度：学术词汇、多层从句、抽象概念与修辞表达",
+    }.get(difficulty, "四级难度：含常见学术词汇，可有一层从句")
+
+    system_msg = "你是一位英语分级读物编写专家，擅长按指定难度编写主题阅读文本。"
+    user_msg = f"""请编写一篇英语阅读文本。
+
+主题: {topic}
+文本难度: {difficulty_spec}
+篇幅: {length_spec[0]}
+
+【要求】
+1. 难度要求必须落实到词汇与句法层面（见上方"文本难度"说明）
+2. 内容有明确的信息层次与逻辑推进，适合做阅读理解训练
+3. source 栏填写虚拟的合理出处风格（如分级读物/科普杂志风格描述）
+
+请严格按 JSON 格式输出：
+{{
+  "title": "英文标题",
+  "content": "完整正文（纯英文，{length_spec[0]}）",
+  "source": "建议来源标注（如 Graded Reader - Science）",
+  "word_count": 词数,
+  "difficulty_notes": "一句话说明该文本的难度特征"
+}}"""
+
+    result, _hit = await cached_json(
+        "generate_reading_text",
+        [topic, difficulty, length],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: _mock_generated_text(topic, difficulty, length),
+            max_tokens=1500,
+        ),
+    )
+    if isinstance(result, dict) and result.get("content"):
+        result.setdefault("word_count", len(str(result.get("content", "")).split()))
+    return result
+
+
+async def generate_speaking_topics(theme: str, difficulty: str, count: int = 3) -> dict:
+    """AI 生成口语 Presentation 话题（按主题方向+难度）"""
+    if not settings.LLM_API_KEY:
+        return _mock_speaking_topics(theme, difficulty, count)
+
+    system_msg = "你是一位英语口语考试命题专家，熟悉托福/雅思口语独立题的命题风格。"
+    user_msg = f"""请围绕主题方向生成 {count} 个英语口语 Presentation 话题。
+
+主题方向: {theme}
+难度: {difficulty}（初级=日常描述类；中级=观点阐述类；高级=思辨论证类）
+
+【要求】每个话题用一句完整英文题目描述（含作答指引），风格类似雅思 Part 2 / 托福独立口语题。
+
+请严格按 JSON 格式输出：
+{{
+  "topics": [
+    {{"title": "英文题目描述", "category": "分类（科技/人物/经历/社会/文化/教育/环境/其他）", "difficulty": "{difficulty}"}}
+  ]
+}}"""
+
+    result, _hit = await cached_json(
+        "generate_speaking_topics",
+        [theme, difficulty, count],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: _mock_speaking_topics(theme, difficulty, count),
+            max_tokens=700,
+        ),
+    )
+    if not isinstance(result, dict) or not result.get("topics"):
+        return _mock_speaking_topics(theme, difficulty, count)
+    return result
+
+
+async def generate_retelling_material(topic: str, length: str = "medium") -> dict:
+    """AI 生成复述练习素材（短文/微型讲座文本，供 TTS 播放后复述）"""
+    if not settings.LLM_API_KEY:
+        return _mock_retelling_material(topic, length)
+
+    length_spec = {
+        "short": ("约 90-120 词", 105),
+        "medium": ("约 150-200 词", 175),
+        "long": ("约 220-280 词", 250),
+    }.get(length, ("约 150-200 词", 175))
+
+    system_msg = "你是一位英语听力教材编写专家，擅长编写适合复述训练的短文。"
+    user_msg = f"""请编写一段适合「听后复述」训练的英语短文。
+
+主题: {topic}
+篇幅: {length_spec[0]}
+
+【要求】
+1. 内容有清晰的信息层次（3-5 个要点），便于学生复述时组织
+2. 语言难度中等（四级水平），信息密度适中
+3. key_points 给出 3-5 条复述时应覆盖的要点（中文概括）
+
+请严格按 JSON 格式输出：
+{{
+  "title": "素材标题",
+  "script": "完整短文（纯英文，{length_spec[0]}）",
+  "key_points": ["要点1", "要点2", "要点3"]
+}}"""
+
+    result, _hit = await cached_json(
+        "generate_retelling_material",
+        [topic, length],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: _mock_retelling_material(topic, length),
+            max_tokens=800,
+        ),
+    )
+    if not isinstance(result, dict) or not result.get("script"):
+        return _mock_retelling_material(topic, length)
+    return result
+
+
+async def generate_writing_topics(writing_type: str, theme: str, difficulty: str, count: int = 3) -> dict:
+    """AI 生成写作题目（按题型+主题+难度）"""
+    if not settings.LLM_API_KEY:
+        return _mock_writing_topics(writing_type, theme, difficulty, count)
+
+    type_desc = {
+        "chart": "图表作文（雅思 Task 1 风格：描述数据/流程/图表）",
+        "argumentative": "议论文（雅思 Task 2 / 考研大作文风格：观点论证）",
+        "letter": "书信/应用文（建议信/申请信/投诉信等）",
+        "summary": "摘要写作（读后概括）",
+    }.get(writing_type, "议论文")
+
+    system_msg = "你是一位英语写作考试命题专家。"
+    user_msg = f"""请生成 {count} 个英语写作题目。
+
+题型: {type_desc}
+主题方向: {theme}
+难度: {difficulty}（初级=结构简单字数要求低；中级=标准考试要求；高级=论证深度与词汇要求高）
+
+【要求】
+- 图表作文需在题目中虚拟描述图表内容（数据/趋势）
+- 议论文题目要有明确的作答指引与最低字数要求
+- instructions 用中文说明写作要求
+
+请严格按 JSON 格式输出：
+{{
+  "topics": [
+    {{"title": "英文题目（含虚拟图表描述或完整题干）", "instructions": "中文写作要求说明", "difficulty": "{difficulty}"}}
+  ]
+}}"""
+
+    result, _hit = await cached_json(
+        "generate_writing_topics",
+        [writing_type, theme, difficulty, count],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: _mock_writing_topics(writing_type, theme, difficulty, count),
+            max_tokens=800,
+        ),
+    )
+    if not isinstance(result, dict) or not result.get("topics"):
+        return _mock_writing_topics(writing_type, theme, difficulty, count)
+    return result
+
+
+async def generate_vocab_exercises(script: str, count: int = 6) -> dict:
+    """AI 基于文本生成词汇三件套练习：选词填空 / 释义匹配 / 造句
+
+    一次调用生成三种题型的完整数据，前端按题型分别渲染。
+    """
+    if not settings.LLM_API_KEY:
+        return _mock_vocab_exercises(script, count)
+
+    system_msg = "你是一位英语词汇教学专家，擅长基于语料设计词汇练习。"
+    user_msg = f"""以下是一段英语文本。请基于文中出现的词汇设计三种词汇练习。
+
+文本:
+---
+{script[:6000]}
+---
+
+【要求】
+1. 先选出 {count} 个对学习者最有价值的词汇（优先选文本中的关键动词/名词/形容词）
+2. cloze（选词填空）：{count} 题，每题从文本中取一句话挖掉目标词（用 ____ 表示空格），
+   options 给 4 个选项（含正确答案），answer 为正确答案
+3. matching（释义匹配）：{count} 对 word-definition 配对，definition 用中文
+4. sentence_words（造句练习）：从已选词汇中挑 4 个适合造句的词，每个附 hint（中文提示）
+
+请严格按 JSON 格式输出：
+{{
+  "cloze": [
+    {{"sentence": "包含 ____ 的句子（其余部分保持原文）", "options": ["词A", "词B", "词C", "词D"], "answer": "正确词"}}
+  ],
+  "matching": [
+    {{"word": "词汇", "definition": "中文释义"}}
+  ],
+  "sentence_words": [
+    {{"word": "词汇", "hint": "中文造句提示"}}
+  ]
+}}"""
+
+    result, _hit = await cached_json(
+        "generate_vocab_exercises",
+        [script, count],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: _mock_vocab_exercises(script, count),
+            max_tokens=1500,
+        ),
+    )
+    if not isinstance(result, dict):
+        return _mock_vocab_exercises(script, count)
+    return result
+
+
+async def grade_sentence(word: str, sentence: str) -> dict:
+    """AI 评阅造句练习（用指定词汇造句）"""
+    if not settings.LLM_API_KEY:
+        return _mock_sentence_grade(word, sentence)
+
+    system_msg = "你是一位英语词汇教学专家，正在批改学生的造句练习。"
+    user_msg = f"""学生需要用指定词汇造句。
+
+指定词汇: {word}
+学生造句: {sentence}
+
+请从以下方面评阅：
+1. 词汇使用是否正确（词义、搭配、词形）
+2. 语法是否正确
+3. 句子是否自然地道
+
+请严格按 JSON 格式输出：
+{{
+  "score": 0-100 的整数分数,
+  "correct_usage": true/false（词汇用法是否正确）,
+  "feedback": "中文点评（指出优点与问题，两三句话）",
+  "improved": "如句子有问题，给出改进后的例句；无问题则给出更地道的表达"
+}}"""
+
+    result, _hit = await cached_json(
+        "grade_sentence",
+        [word, sentence],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: _mock_sentence_grade(word, sentence),
+            max_tokens=400,
+        ),
+    )
+    if not isinstance(result, dict):
+        return _mock_sentence_grade(word, sentence)
+    return result
+
+
+def _mock_generated_text(topic: str, difficulty: str, length: str) -> dict:
+    words = 180 if length == "short" else 350 if length == "medium" else 570
+    filler = " ".join([f"science research finding number {i} about {topic}" for i in range(60)])
+    return {
+        "title": f"A Closer Look at {topic.title()}",
+        "content": (f"Generated reading text about {topic} (difficulty: {difficulty}). " * 10)[: words * 6] or filler,
+        "source": "AI Generated (mock)",
+        "word_count": words,
+        "difficulty_notes": f"mock 文本（无 LLM key 时降级返回）：{difficulty} 难度示例",
+    }
+
+
+def _mock_speaking_topics(theme: str, difficulty: str, count: int) -> dict:
+    return {
+        "topics": [
+            {"title": f"Describe an experience related to {theme} and explain why it matters to you.", "category": "经历", "difficulty": difficulty},
+            {"title": f"Discuss the advantages and disadvantages of {theme}. Support your view with examples.", "category": "观点", "difficulty": difficulty},
+            {"title": f"Some people think {theme} has changed modern life for the better, while others disagree. Present your opinion.", "category": "思辨", "difficulty": difficulty},
+        ][:count]
+    }
+
+
+def _mock_retelling_material(topic: str, length: str) -> dict:
+    return {
+        "title": f"Retelling Material: {topic}",
+        "script": (f"This is a mock retelling material about {topic}. It contains several key points "
+                   "that students should cover in their retelling, including the background, "
+                   "the main development, and the conclusion of the topic. "),
+        "key_points": [f"关于 {topic} 的背景", "主要发展过程", "结论与影响"],
+    }
+
+
+def _mock_writing_topics(writing_type: str, theme: str, difficulty: str, count: int) -> dict:
+    return {
+        "topics": [
+            {"title": f"Write an essay discussing the impact of {theme} on modern society.", "instructions": "写一篇议论文，阐述你的观点并举例论证。至少 150 词。", "difficulty": difficulty},
+            {"title": f"Some people believe {theme} brings more benefits than problems. To what extent do you agree?", "instructions": "议论文，表明立场并论证。至少 200 词。", "difficulty": difficulty},
+            {"title": f"Describe how {theme} has changed in the last decade and predict future trends.", "instructions": "说明文，描述变化并预测趋势。至少 150 词。", "difficulty": difficulty},
+        ][:count]
+    }
+
+
+def _mock_vocab_exercises(script: str, count: int) -> dict:
+    sents = [s.strip() for s in script.split(".") if s.strip()][:count]
+    words = [s.split()[0] if s.split() else "word" for s in sents]
+    return {
+        "cloze": [
+            {"sentence": s.replace(w, "____", 1) if w in s else f"The team ____ the project ({w}).",
+             "options": [w, "abandon", "delay", "ignore"], "answer": w}
+            for s, w in zip(sents, words)
+        ],
+        "matching": [{"word": w, "definition": "（mock 释义）待配置 LLM key 后自动生成"} for w in words],
+        "sentence_words": [{"word": w, "hint": "用这个词造一个与原文语境相关的句子"} for w in words[:4]],
+    }
+
+
+def _mock_sentence_grade(word: str, sentence: str) -> dict:
+    used = word.lower() in sentence.lower()
+    return {
+        "score": 80 if used else 40,
+        "correct_usage": used,
+        "feedback": ("（mock 评阅）检测到目标词汇已使用。" if used else "（mock 评阅）未检测到目标词汇，请确认造句中使用了指定单词。"),
+        "improved": f"Try: The {word} plays an important role in this context.",
+    }
+
 
 def _mock_writing_grade(content: str) -> dict:
     return {

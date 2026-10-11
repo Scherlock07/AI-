@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button'
 import { Progress } from '@/components/ui/Progress'
 import { Skeleton, ErrorState, EmptyState, LoadingSpinner } from '@/components/ui/Loading'
 import { cn, getScoreColor, formatDate } from '@/lib/utils'
+import { dailyIndex, todayLabel } from '@/lib/daily'
 import { writingApi } from '@/api/client'
 import { useToast } from '@/contexts/ToastContext'
 import { trackFeatureUse } from '@/lib/tracker'
@@ -625,10 +626,37 @@ function DailyPracticeView() {
   const [result, setResult] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  // AI 生成的题目（按题型追加，本次会话有效）
+  const [generatedTopics, setGeneratedTopics] = useState<Record<string, { title: string; instructions: string; difficulty: string }[]>>({})
+  // AI 生成表单
+  const [genTheme, setGenTheme] = useState('')
+  const [genDifficulty, setGenDifficulty] = useState('intermediate')
+  const [genLoading, setGenLoading] = useState(false)
 
   const handleSelectType = (type: string) => {
     setSelectedType(type)
     setPhase('topics')
+  }
+
+  // AI 按题型+主题+难度生成写作题目
+  const handleGenerateTopics = async () => {
+    if (!selectedType) return
+    setGenLoading(true)
+    try {
+      const res = await writingApi.generateTopic({ type: selectedType, theme: genTheme.trim(), difficulty: genDifficulty, count: 3 })
+      const topics = res?.topics || []
+      if (topics.length > 0) {
+        setGeneratedTopics(prev => ({ ...prev, [selectedType]: [...(prev[selectedType] || []), ...topics] }))
+        setGenTheme('')
+        toast(`已生成 ${topics.length} 道题目`, 'success')
+      } else {
+        toast('生成结果为空，请稍后重试', 'warning')
+      }
+    } catch (err: any) {
+      toast(err?.message || '生成失败，请稍后重试', 'error')
+    } finally {
+      setGenLoading(false)
+    }
   }
 
   const handleSelectTopic = (topic: { title: string; instructions: string; difficulty: string }) => {
@@ -684,7 +712,9 @@ function DailyPracticeView() {
   // ===== 题目选择视图 =====
   if (phase === 'topics' && selectedType) {
     const meta = PRACTICE_TYPE_META[selectedType]
-    const topics = PRACTICE_TOPICS[selectedType] || []
+    const builtin = PRACTICE_TOPICS[selectedType] || []
+    const generated = generatedTopics[selectedType] || []
+    const topics = [...builtin, ...generated]
     const Icon = meta.icon
     return (
       <div className="space-y-4">
@@ -705,31 +735,69 @@ function DailyPracticeView() {
             </div>
           </CardHeader>
         </Card>
+
+        {/* AI 生成自定义题目 */}
+        <Card className="border-amber-200">
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-amber-500" />
+              <CardTitle>AI 生成自定义题目</CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-2">
+              <input
+                value={genTheme}
+                onChange={(e) => setGenTheme(e.target.value)}
+                placeholder="主题方向（可留空则随机），如：remote work / 教育公平"
+                className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-amber-400"
+              />
+              <select
+                value={genDifficulty}
+                onChange={(e) => setGenDifficulty(e.target.value)}
+                className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:border-amber-400"
+              >
+                <option value="beginner">初级</option>
+                <option value="intermediate">中级</option>
+                <option value="advanced">高级</option>
+              </select>
+              <Button onClick={handleGenerateTopics} disabled={genLoading}>
+                {genLoading ? <LoadingSpinner size="sm" /> : <Sparkles className="w-4 h-4" />}
+                {genLoading ? '生成中...' : '生成 3 题'}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
         <div className="space-y-3">
-          {topics.map((topic, i) => (
-            <Card key={i} hover>
-              <CardContent className="pt-5">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 text-xs flex items-center justify-center font-medium">
-                        {i + 1}
-                      </span>
-                      <Badge variant={topic.difficulty === '高级' ? 'danger' : topic.difficulty === '中级' ? 'warning' : 'success'}>
-                        {topic.difficulty}
-                      </Badge>
+          {topics.map((topic, i) => {
+            const isGenerated = i >= builtin.length
+            return (
+              <Card key={`${topic.title}-${i}`} hover>
+                <CardContent className="pt-5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 text-xs flex items-center justify-center font-medium">
+                          {i + 1}
+                        </span>
+                        <Badge variant={topic.difficulty === '高级' ? 'danger' : topic.difficulty === '中级' ? 'warning' : 'success'}>
+                          {topic.difficulty}
+                        </Badge>
+                        {isGenerated && <Badge variant="primary">AI生成</Badge>}
+                      </div>
+                      <p className="text-sm font-medium text-gray-800 mb-1">{topic.title}</p>
+                      <p className="text-xs text-gray-400">{topic.instructions}</p>
                     </div>
-                    <p className="text-sm font-medium text-gray-800 mb-1">{topic.title}</p>
-                    <p className="text-xs text-gray-400">{topic.instructions}</p>
+                    <Button size="sm" variant="gradient" onClick={() => handleSelectTopic(topic)}>
+                      <PenLine className="w-3 h-3" />
+                      开始写作
+                    </Button>
                   </div>
-                  <Button size="sm" variant="gradient" onClick={() => handleSelectTopic(topic)}>
-                    <PenLine className="w-3 h-3" />
-                    开始写作
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardContent>
+              </Card>
+            )
+          })}
         </div>
       </div>
     )
@@ -920,7 +988,13 @@ function DailyPracticeView() {
   }
 
   // ===== 总览视图 =====
-  const todayTopic = PRACTICE_TOPICS.chart[0]
+  // 今日推荐按日期轮换：全部题库打平后按天内序号取模，每天自动换题、跨题型轮换
+  const allFlat = (Object.keys(PRACTICE_TYPE_META) as string[]).flatMap(type =>
+    (PRACTICE_TOPICS[type] || []).map(t => ({ type, topic: t })),
+  )
+  const todayPick = allFlat[dailyIndex(allFlat.length)] || { type: 'chart', topic: PRACTICE_TOPICS.chart[0] }
+  const todayTopic = todayPick.topic
+  const todayType = todayPick.type
   return (
     <div className="space-y-6">
       <Card className="bg-gradient-to-r from-indigo-50 to-purple-50 border-indigo-100">
@@ -930,7 +1004,10 @@ function DailyPracticeView() {
               <Star className="w-5 h-5 text-amber-500 fill-amber-500" />
               <CardTitle>今日推荐题目</CardTitle>
             </div>
-            <Badge variant="primary">图表分析题</Badge>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-400">{todayLabel()} 每日更新</span>
+              <Badge variant="primary">{PRACTICE_TYPE_META[todayType]?.title}</Badge>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -944,8 +1021,11 @@ function DailyPracticeView() {
             <div className="flex items-center gap-1 text-sm text-gray-400">
               建议词数 <span className="font-medium text-gray-600">150-200</span>
             </div>
+            <Badge variant={todayTopic.difficulty === '高级' ? 'danger' : todayTopic.difficulty === '中级' ? 'warning' : 'success'}>
+              {todayTopic.difficulty}
+            </Badge>
           </div>
-          <Button variant="gradient" size="lg" onClick={() => { setSelectedType('chart'); setSelectedTopic(todayTopic); setContent(''); setResult(null); setPhase('writing'); }}>
+          <Button variant="gradient" size="lg" onClick={() => { setSelectedType(todayType); setSelectedTopic(todayTopic); setContent(''); setResult(null); setPhase('writing'); }}>
             <PenLine className="w-4 h-4" />
             开始写作
           </Button>

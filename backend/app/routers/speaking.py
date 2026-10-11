@@ -2,6 +2,7 @@
 
 import json
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.user import User
@@ -16,10 +17,50 @@ from app.schemas.speaking import (
 )
 from app.services.llm_service import (
     evaluate_speaking, recommend_discussion_topics, generate_ai_discussion_reply,
+    generate_speaking_topics, generate_retelling_material,
 )
 from app.services.speech_service import assess_pronunciation
 
 router = APIRouter(prefix="/api/speaking", tags=["口语模块"])
+
+
+class GenerateTopicsRequest(BaseModel):
+    theme: str
+    difficulty: str = "intermediate"  # beginner / intermediate / advanced
+    count: int = 3
+
+
+class GenerateRetellingRequest(BaseModel):
+    topic: str
+    length: str = "medium"  # short / medium / long
+
+
+@router.post("/generate-topic")
+async def generate_topic(req: GenerateTopicsRequest, user: User = Depends(get_current_user)):
+    """AI 生成口语 Presentation 话题（按主题方向+难度）"""
+    if not req.theme.strip():
+        raise HTTPException(400, "缺少主题方向")
+    if len(req.theme) > 200:
+        raise HTTPException(400, "主题过长")
+    if req.difficulty not in ("beginner", "intermediate", "advanced"):
+        req.difficulty = "intermediate"
+    if not (1 <= req.count <= 5):
+        req.count = 3
+    result = await generate_speaking_topics(req.theme, req.difficulty, req.count)
+    return result
+
+
+@router.post("/generate-retelling")
+async def generate_retelling(req: GenerateRetellingRequest, user: User = Depends(get_current_user)):
+    """AI 生成复述练习素材（短文 + 复述要点）"""
+    if not req.topic.strip():
+        raise HTTPException(400, "缺少主题")
+    if len(req.topic) > 200:
+        raise HTTPException(400, "主题过长")
+    if req.length not in ("short", "medium", "long"):
+        req.length = "medium"
+    result = await generate_retelling_material(req.topic, req.length)
+    return result
 
 
 @router.post("/evaluate", response_model=SpeakingEvaluateResult)

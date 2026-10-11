@@ -102,6 +102,22 @@ export const listeningApi = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+
+  vocabExercises: (data: { script: string; count?: number }) =>
+    request<{
+      cloze: { sentence: string; options: string[]; answer: string }[]
+      matching: { word: string; definition: string }[]
+      sentence_words: { word: string; hint: string }[]
+    }>('/api/listening/vocab-exercises', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  vocabGrade: (data: { word: string; sentence: string }) =>
+    request<{ score: number; correct_usage: boolean; feedback: string; improved: string }>('/api/listening/vocab-grade', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 }
 
 // ========== 口语模块 API ==========
@@ -111,6 +127,20 @@ export const speakingApi = {
     request('/api/speaking/evaluate', { method: 'POST', body: JSON.stringify(data) }),
 
   listRecords: () => request('/api/speaking/records'),
+
+  // AI 生成 Presentation 话题（按主题方向+难度）
+  generateTopic: (data: { theme: string; difficulty: string; count?: number }) =>
+    request<{ topics: { title: string; category: string; difficulty: string }[] }>('/api/speaking/generate-topic', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // AI 生成复述练习素材
+  generateRetelling: (data: { topic: string; length?: string }) =>
+    request<{ title: string; script: string; key_points: string[] }>('/api/speaking/generate-retelling', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   // 讨论主题推荐
   recommendTopics: (data: { category: string; difficulty: string; count: number }) =>
@@ -182,6 +212,13 @@ export const speakingApi = {
 export const readingApi = {
   listTexts: () => request('/api/reading/texts'),
 
+  // AI 按主题+难度生成阅读文本
+  generateText: (data: { topic: string; difficulty: string; length?: string }) =>
+    request<{ title: string; content: string; source: string; word_count: number; difficulty_notes: string }>(
+      '/api/reading/generate-text',
+      { method: 'POST', body: JSON.stringify(data) },
+    ),
+
   import: (data: { title: string; source: string; content: string; difficulty: string }) =>
     request('/api/reading/import', { method: 'POST', body: JSON.stringify(data) }),
 
@@ -217,6 +254,13 @@ export const writingApi = {
 
   ocr: (image_base64: string) =>
     request('/api/writing/ocr', { method: 'POST', body: JSON.stringify({ image_base64 }) }),
+
+  // AI 生成写作题目（按题型+主题+难度）
+  generateTopic: (data: { type: string; theme?: string; difficulty: string; count?: number }) =>
+    request<{ topics: { title: string; instructions: string; difficulty: string }[] }>('/api/writing/generate-topic', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   listSubmissions: () => request('/api/writing/submissions'),
 

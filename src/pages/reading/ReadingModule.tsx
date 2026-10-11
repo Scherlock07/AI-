@@ -187,8 +187,11 @@ function ImportView() {
   const [importing, setImporting] = useState(false)
   const [success, setSuccess] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [activeMode, setActiveMode] = useState<'scan' | 'upload' | 'paste' | null>(null)
+  const [activeMode, setActiveMode] = useState<'scan' | 'upload' | 'paste' | 'ai' | null>(null)
   const [modeLoading, setModeLoading] = useState(false)
+  const [genTopic, setGenTopic] = useState('')
+  const [genLength, setGenLength] = useState('medium')
+  const [genLoading, setGenLoading] = useState(false)
 
   const imageInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -261,6 +264,32 @@ function ImportView() {
     toast('请在下方文本框粘贴内容', 'info')
   }
 
+  // AI 按主题+难度生成阅读文本（难度真正作用于文本的词汇与句法复杂度）
+  const handleGenerateText = async () => {
+    if (!genTopic.trim()) {
+      toast('请先输入生成主题', 'warning')
+      return
+    }
+    setGenLoading(true)
+    setError(null)
+    setSuccess(false)
+    try {
+      const res = await readingApi.generateText({ topic: genTopic.trim(), difficulty, length: genLength })
+      if (res?.content) {
+        setTitle(res.title || genTopic)
+        setSource(res.source || 'AI Generated')
+        setContent(res.content)
+        toast(`生成完成（约 ${res.word_count || res.content.split(/\s+/).length} 词），可编辑后导入文本库`, 'success')
+      } else {
+        toast('生成结果为空，请稍后重试', 'warning')
+      }
+    } catch (err: any) {
+      setError(err.message || 'AI 生成失败，请稍后重试')
+    } finally {
+      setGenLoading(false)
+    }
+  }
+
   const handleImport = async () => {
     if (!title.trim() || !content.trim()) return
     setImporting(true)
@@ -281,6 +310,7 @@ function ImportView() {
   }
 
   const importModes = [
+    { key: 'ai' as const, title: 'AI 生成文本', icon: Sparkles, desc: '设置主题与难度，AI 生成对应难度的阅读文本（难度作用于词汇与句法）', color: 'from-amber-400 to-orange-500' },
     { key: 'scan' as const, title: '扫描图片', icon: Scan, desc: 'JPG / PNG / WebP，≤10MB；印刷体识别效果最佳，手写体需字迹工整', color: 'from-blue-400 to-blue-600' },
     { key: 'upload' as const, title: '上传文件', icon: FileText, desc: '支持 TXT 格式，自动填入', color: 'from-purple-400 to-purple-600' },
     { key: 'paste' as const, title: '粘贴文本', icon: Upload, desc: '直接粘贴外刊文章或文本内容（最准确的方式）', color: 'from-emerald-400 to-emerald-600' },
@@ -305,7 +335,7 @@ function ImportView() {
       />
 
       {/* Import Methods */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {importModes.map((mode) => {
           const Icon = mode.icon
           const isActive = activeMode === mode.key
@@ -327,6 +357,8 @@ function ImportView() {
                   } else if (mode.key === 'upload') {
                     setActiveMode('upload')
                     fileInputRef.current?.click()
+                  } else if (mode.key === 'ai') {
+                    setActiveMode('ai')
                   } else {
                     handlePasteMode()
                   }
@@ -350,10 +382,48 @@ function ImportView() {
       {/* Import Form */}
       <Card>
         <CardHeader>
-          <CardTitle>手动导入文本</CardTitle>
+          <CardTitle>{activeMode === 'ai' ? 'AI 生成阅读文本' : '手动导入文本'}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
+            {activeMode === 'ai' && (
+              <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-4">
+                <div>
+                  <label className="text-sm font-medium text-gray-700 mb-1.5 block">生成主题</label>
+                  <input
+                    value={genTopic}
+                    onChange={(e) => setGenTopic(e.target.value)}
+                    placeholder="输入英文或中文主题，如：remote work / 极地科考 / cyber security"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700 mb-1.5 block">篇幅</label>
+                  <div className="flex gap-2">
+                    {[
+                      { value: 'short', label: '短篇 ~180词' },
+                      { value: 'medium', label: '中篇 ~350词' },
+                      { value: 'long', label: '长篇 ~570词' },
+                    ].map(l => (
+                      <button key={l.value} onClick={() => setGenLength(l.value)}
+                        className={cn('flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-all',
+                          genLength === l.value ? 'bg-amber-100 text-amber-700 ring-2 ring-amber-300' : 'bg-gray-50 text-gray-500')}>
+                        {l.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500">
+                  下方「文本难度」同时控制生成难度：初级=高频词+短句，中级=四级+单层从句，高级=学术词汇+多层从句。
+                  生成后文本填入下方表单，可编辑再导入。
+                </p>
+                <Button size="lg" className="w-full" onClick={handleGenerateText} disabled={genLoading || !genTopic.trim()}>
+                  {genLoading ? <LoadingSpinner size="sm" /> : <Sparkles className="w-4 h-4" />}
+                  {genLoading ? 'AI 生成中...' : '生成阅读文本'}
+                </Button>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="text-sm font-medium text-gray-700 mb-1.5 block">标题</label>
@@ -376,7 +446,7 @@ function ImportView() {
             </div>
 
             <div>
-              <label className="text-sm font-medium text-gray-700 mb-1.5 block">难度</label>
+              <label className="text-sm font-medium text-gray-700 mb-1.5 block">文本难度</label>
               <div className="flex gap-2">
                 {[
                   { value: 'beginner', label: '初级' },
@@ -390,6 +460,9 @@ function ImportView() {
                   </button>
                 ))}
               </div>
+              <p className="mt-1.5 text-xs text-gray-400">
+                标记文本自身的难度（用于生成模式下控制词汇与句法复杂度；导入外刊时按体感标注即可，不影响分析内容）
+              </p>
             </div>
 
             <div>
@@ -666,12 +739,12 @@ function AnalyzeView({ initialContent }: { initialContent?: string }) {
           </div>
 
           <div className="mb-4">
-            <label className="text-sm font-medium text-gray-700 mb-1.5 block">难度级别</label>
+            <label className="text-sm font-medium text-gray-700 mb-1.5 block">分析深度（同一文本按学习者水平输出不同深度的分析）</label>
             <div className="flex gap-2">
               {[
-                { value: 'beginner', label: '初级' },
-                { value: 'intermediate', label: '中级' },
-                { value: 'advanced', label: '高级' },
+                { value: 'beginner', label: '概览（初级）' },
+                { value: 'intermediate', label: '标准（中级）' },
+                { value: 'advanced', label: '深度（高级）' },
               ].map(d => (
                 <button key={d.value} onClick={() => setDifficulty(d.value)}
                   className={cn('flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all',
@@ -680,6 +753,9 @@ function AnalyzeView({ initialContent }: { initialContent?: string }) {
                 </button>
               ))}
             </div>
+            <p className="mt-1.5 text-xs text-gray-400">
+              概览=摘要+要点+基础词汇；标准=完整分析+长难句解析；深度=论证链+修辞手法+批判性思考问题
+            </p>
           </div>
 
           <Button size="lg" className="w-full" onClick={handleAnalyze} disabled={analyzing || !content.trim()}>

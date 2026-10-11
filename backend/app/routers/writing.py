@@ -3,6 +3,7 @@
 import json
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.user import User
@@ -12,10 +13,31 @@ from app.schemas.writing import (
     WritingSubmitRequest, WritingGradeRequest, WritingResponse, WritingGradeResult,
     WritingEnhanceRequest, WritingOcrRequest,
 )
-from app.services.llm_service import grade_writing, generate_writing_enhancement
+from app.services.llm_service import grade_writing, generate_writing_enhancement, generate_writing_topics
 from app.services.ocr_service import recognize_handwriting
 
 router = APIRouter(prefix="/api/writing", tags=["写作模块"])
+
+
+class GenerateTopicRequest(BaseModel):
+    type: str = "argumentative"  # chart / argumentative / letter / summary
+    theme: str = ""
+    difficulty: str = "intermediate"  # beginner / intermediate / advanced
+    count: int = 3
+
+
+@router.post("/generate-topic")
+async def generate_topic(req: GenerateTopicRequest, user: User = Depends(get_current_user)):
+    """AI 生成写作题目（按题型+主题+难度）"""
+    theme = (req.theme or "").strip() or "general topics"
+    if len(theme) > 200:
+        raise HTTPException(400, "主题过长")
+    if req.difficulty not in ("beginner", "intermediate", "advanced"):
+        req.difficulty = "intermediate"
+    if not (1 <= req.count <= 5):
+        req.count = 3
+    result = await generate_writing_topics(req.type, theme, req.difficulty, req.count)
+    return result
 
 
 @router.post("/submit", response_model=WritingResponse)
