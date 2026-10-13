@@ -1,7 +1,8 @@
 """学生端班级路由：凭邀请码加入班级、查看我的班级、退出班级"""
 
 import secrets
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.user import User
@@ -26,13 +27,20 @@ def _serialize_class(cls: Class, db: Session, teacher_name: str = "") -> dict:
     }
 
 
+class JoinPayload(BaseModel):
+    invite_code: str = ""
+
+
 @router.post("/join", response_model=dict)
 async def join_class(
-    invite_code: str,
+    invite_code: str = "",
+    payload: JoinPayload | None = Body(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """凭邀请码加入班级"""
+    """凭邀请码加入班级（兼容 JSON body 与 query 参数）"""
+    if payload and payload.invite_code:
+        invite_code = payload.invite_code
     code = (invite_code or "").strip().upper()
     if not code:
         raise HTTPException(status_code=400, detail="请输入邀请码")
