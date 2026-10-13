@@ -3,7 +3,8 @@
 import json
 import secrets
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.user import User
@@ -25,8 +26,23 @@ def _get_owned_class(class_id: str, user: User, db: Session) -> Class:
 
 # ========== 班级管理 ==========
 
+class ClassCreatePayload(BaseModel):
+    name: str = ""
+    description: str = ""
+
+
 @router.post("/classes", response_model=dict)
-async def create_class(name: str, description: str = "", db: Session = Depends(get_db), user: User = Depends(require_teacher)):
+async def create_class(
+    name: str = "",
+    description: str = "",
+    payload: ClassCreatePayload | None = Body(default=None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_teacher),
+):
+    # 兼容两种传参：JSON body（推荐）与 query 参数（历史前端）
+    if payload and payload.name:
+        name = payload.name
+        description = payload.description or description
     clean_name = (name or "").strip()
     if not clean_name:
         raise HTTPException(status_code=400, detail="班级名称不能为空")
