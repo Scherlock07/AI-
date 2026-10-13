@@ -13,6 +13,8 @@ import {
   GraduationCap, Users, FileText, TrendingUp, Download,
   Bell, ClipboardList, BarChart3, Settings, Plus,
   MessageSquarePlus, Activity, LayoutGrid,
+  Copy, Check, Pencil, Trash2, RefreshCw, X, KeyRound,
+  AlertTriangle, Link2,
 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -33,6 +35,103 @@ export function TeacherDashboard() {
   const [showCreate, setShowCreate] = useState(false)
   const [newClassName, setNewClassName] = useState('')
   const [creating, setCreating] = useState(false)
+
+  // 班级管理：邀请 / 改名 / 删除
+  const [showInvite, setShowInvite] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [editingClass, setEditingClass] = useState<{ id: string; name: string; description: string } | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editDesc, setEditDesc] = useState('')
+  const [savingEdit, setSavingEdit] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; member_count: number } | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [regenLoading, setRegenLoading] = useState(false)
+
+  const currentClass = classes.find((c) => c.id === selectedClass) || null
+
+  const handleCopyInvite = async () => {
+    if (!currentClass) return
+    const code = currentClass.invite_code || ''
+    const text = `邀请你加入「${currentClass.name}」班级\n邀请码：${code}\n加入方式：登录 AI 外语学习平台 → 我的班级 → 输入邀请码`
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      toast('邀请信息已复制，可发送给学生', 'success')
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      try {
+        await navigator.clipboard.writeText(code)
+        setCopied(true)
+        toast('邀请码已复制', 'success')
+        setTimeout(() => setCopied(false), 2000)
+      } catch {
+        toast('复制失败，请手动记录邀请码：' + code, 'info')
+      }
+    }
+  }
+
+  const handleRegenerateCode = async () => {
+    if (!currentClass) return
+    setRegenLoading(true)
+    try {
+      const res: any = await teacherApi.regenerateInviteCode(currentClass.id)
+      await fetchClasses()
+      toast(res?.message || '邀请码已重置', 'success')
+    } catch (err: any) {
+      toast(err.message || '重置邀请码失败', 'error')
+    } finally {
+      setRegenLoading(false)
+    }
+  }
+
+  const handleOpenEdit = () => {
+    if (!currentClass) return
+    setEditingClass({ id: currentClass.id, name: currentClass.name, description: currentClass.description || '' })
+    setEditName(currentClass.name)
+    setEditDesc(currentClass.description || '')
+  }
+
+  const handleSaveEdit = async () => {
+    if (!editingClass) return
+    const trimmed = editName.trim()
+    if (!trimmed) {
+      toast('班级名称不能为空', 'error')
+      return
+    }
+    if (trimmed === editingClass.name && editDesc === editingClass.description) {
+      setEditingClass(null)
+      return
+    }
+    setSavingEdit(true)
+    try {
+      await teacherApi.updateClass(editingClass.id, trimmed, editDesc)
+      setEditingClass(null)
+      await fetchClasses()
+      toast('班级信息已更新', 'success')
+    } catch (err: any) {
+      toast(err.message || '修改失败', 'error')
+    } finally {
+      setSavingEdit(false)
+    }
+  }
+
+  const handleDeleteClass = async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await teacherApi.deleteClass(deleteTarget.id)
+      setDeleteTarget(null)
+      if (selectedClass === deleteTarget.id) setSelectedClass(null)
+      setStudents([])
+      setAssignments([])
+      await fetchClasses()
+      toast('班级已解散', 'success')
+    } catch (err: any) {
+      toast(err.message || '删除失败', 'error')
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   const fetchClasses = async () => {
     setLoading(true)
@@ -213,6 +312,74 @@ export function TeacherDashboard() {
         </div>
       )}
 
+      {/* 班级管理操作区：邀请学生 / 改名 / 解散 */}
+      {currentClass && (
+        <Card className="mb-5 border-indigo-100 bg-gradient-to-br from-indigo-50/50 to-white">
+          <CardContent className="pt-5">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <div className="w-11 h-11 rounded-xl bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0">
+                  <GraduationCap className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-semibold text-gray-900 truncate">{currentClass.name}</span>
+                    <Badge variant="primary">{currentClass.member_count || 0} 名学生</Badge>
+                  </div>
+                  <div className="text-xs text-gray-400 mt-0.5 truncate">
+                    {currentClass.description || '暂无班级简介'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-2 flex-wrap shrink-0">
+                <Button size="sm" onClick={() => { setShowInvite(!showInvite); setCopied(false) }}>
+                  <Link2 className="w-3.5 h-3.5" />邀请学生
+                </Button>
+                <Button size="sm" variant="outline" onClick={handleOpenEdit}>
+                  <Pencil className="w-3.5 h-3.5" />改名
+                </Button>
+                <Button size="sm" variant="outline"
+                  className="text-red-600 border-red-200 hover:bg-red-50"
+                  onClick={() => setDeleteTarget(currentClass)}>
+                  <Trash2 className="w-3.5 h-3.5" />解散班级
+                </Button>
+              </div>
+            </div>
+
+            {/* 邀请面板 */}
+            {showInvite && (
+              <div className="mt-4 p-4 rounded-xl bg-white border border-indigo-100">
+                <div className="flex items-start gap-2 mb-3">
+                  <KeyRound className="w-4 h-4 text-indigo-500 mt-0.5 shrink-0" />
+                  <div className="text-xs text-gray-500 leading-relaxed">
+                    将邀请码发给学生，学生在<strong className="text-gray-700">「我的班级」</strong>页面输入即可加入。
+                    邀请码为班级唯一凭证，重置后原邀请码立即失效。
+                  </div>
+                </div>
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                  <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-indigo-50 border border-indigo-100">
+                    <span className="text-2xl font-bold tracking-[0.2em] text-indigo-700 font-mono">
+                      {currentClass.invite_code}
+                    </span>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant={copied ? 'outline' : 'primary'} onClick={handleCopyInvite}>
+                      {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      {copied ? '已复制' : '复制邀请信息'}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={handleRegenerateCode} disabled={regenLoading}>
+                      {regenLoading ? <LoadingSpinner size="sm" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                      重置邀请码
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Stats Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4 mb-6">
         {[
@@ -373,6 +540,89 @@ export function TeacherDashboard() {
         </div>
       )}
         </>
+      )}
+
+      {/* 修改班级信息弹窗 */}
+      {editingClass && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 animate-fadeIn"
+          onClick={() => !savingEdit && setEditingClass(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <Pencil className="w-4 h-4 text-indigo-500" />
+                <h3 className="font-semibold text-gray-900">修改班级信息</h3>
+              </div>
+              <button onClick={() => !savingEdit && setEditingClass(null)}
+                className="p-1 rounded-lg hover:bg-gray-100 text-gray-400">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="text-sm font-medium text-gray-700 mb-1.5 block">
+                  班级名称 <span className="text-red-500">*</span>
+                </label>
+                <input value={editName} onChange={(e) => setEditName(e.target.value)}
+                  maxLength={50}
+                  placeholder="如：2026级英语A班"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400" />
+                <div className="text-xs text-gray-400 mt-1 text-right">{editName.length}/50</div>
+              </div>
+              <div>
+                <label className="text-sm font-medium text-gray-700 mb-1.5 block">班级简介（可选）</label>
+                <textarea value={editDesc} onChange={(e) => setEditDesc(e.target.value)}
+                  rows={3} maxLength={500}
+                  placeholder="如：本班面向 2026 级英语专业学生，主攻四级备考"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400 resize-none" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100">
+              <Button variant="outline" onClick={() => setEditingClass(null)} disabled={savingEdit}>取消</Button>
+              <Button onClick={handleSaveEdit} disabled={savingEdit}>
+                {savingEdit ? <LoadingSpinner size="sm" /> : null}
+                {savingEdit ? '保存中...' : '保存'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 解散班级确认弹窗 */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 animate-fadeIn"
+          onClick={() => !deleting && setDeleteTarget(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start gap-3 px-5 py-4 border-b border-gray-100">
+              <div className="w-10 h-10 rounded-xl bg-red-50 text-red-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900">确认解散该班级？</h3>
+                <p className="text-xs text-gray-400 mt-0.5">此操作不可撤销</p>
+              </div>
+            </div>
+            <div className="p-5">
+              <div className="p-3 rounded-xl bg-gray-50 border border-gray-100 mb-3">
+                <div className="text-sm font-medium text-gray-800">{deleteTarget.name}</div>
+                <div className="text-xs text-gray-400 mt-1">
+                  当前班级人数：{deleteTarget.member_count || 0} 人
+                </div>
+              </div>
+              <ul className="text-xs text-gray-500 space-y-1.5 leading-relaxed">
+                <li>· 班级内全部学生成员关系将被移除</li>
+                <li>· 已布置的作业与课堂评分记录将一并删除</li>
+                <li>· 学生端「我的班级」中将不再显示该班级</li>
+              </ul>
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100">
+              <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleting}>取消</Button>
+              <Button variant="danger" onClick={handleDeleteClass} disabled={deleting}>
+                {deleting ? <LoadingSpinner size="sm" /> : <Trash2 className="w-3.5 h-3.5" />}
+                {deleting ? '解散中...' : '确认解散'}
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

@@ -354,6 +354,27 @@ export const teacherApi = {
   },
 
   listAssignments: (classId: string) => request(`/api/teacher/assignments/${classId}`),
+
+  updateClass: (classId: string, name: string, description: string = '') =>
+    request(`/api/teacher/classes/${classId}?name=${encodeURIComponent(name)}&description=${encodeURIComponent(description)}`, { method: 'PUT' }),
+
+  deleteClass: (classId: string) => request(`/api/teacher/classes/${classId}`, { method: 'DELETE' }),
+
+  regenerateInviteCode: (classId: string) =>
+    request(`/api/teacher/classes/${classId}/invite-code`, { method: 'POST' }),
+}
+
+// ========== 学生班级 API ==========
+
+export const classroomApi = {
+  join: (inviteCode: string) =>
+    request(`/api/classroom/join?invite_code=${encodeURIComponent(inviteCode)}`, { method: 'POST' }),
+
+  myClasses: () => request('/api/classroom/my-classes'),
+
+  myAssignments: () => request('/api/classroom/my-assignments'),
+
+  leave: (classId: string) => request(`/api/classroom/leave/${classId}`, { method: 'DELETE' }),
 }
 
 // ========== 学习档案与 AI 助教 API ==========
@@ -413,6 +434,7 @@ export default {
   translation: translationApi,
   community: communityApi,
   teacher: teacherApi,
+  classroom: classroomApi,
   profile: profileApi,
   feedback: feedbackApi,
   analytics: analyticsApi,

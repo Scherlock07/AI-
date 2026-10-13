@@ -11,6 +11,7 @@ import { VocabularyModule } from '@/pages/vocabulary/VocabularyModule'
 import { TranslationModule } from '@/pages/translation/TranslationModule'
 import { CommunityModule } from '@/pages/community/CommunityModule'
 import { TeacherDashboard } from '@/pages/teacher/TeacherDashboard'
+import { MyClasses } from '@/pages/classroom/MyClasses'
 import { LearningProfile } from '@/pages/profile/LearningProfile'
 import { Sparkles } from 'lucide-react'
 
@@ -52,6 +53,7 @@ export default function App() {
         <Route path="/vocabulary" element={<VocabularyModule />} />
         <Route path="/translation" element={<TranslationModule />} />
         <Route path="/community" element={<CommunityModule />} />
+        <Route path="/my-classes" element={<MyClasses />} />
         <Route path="/teacher" element={<TeacherDashboard />} />
         <Route path="/profile" element={<LearningProfile />} />
       </Route>

@@ -26,7 +26,7 @@ from app.models.llm_usage import LLMUsageLog
 from app.models.llm_cache import LLMResultCache  # noqa: F401  注册结果缓存表
 
 # 导入路由
-from app.routers import auth, listening, speaking, reading, writing, vocabulary, translation, community, teacher, profile, feedback, analytics
+from app.routers import auth, listening, speaking, reading, writing, vocabulary, translation, community, teacher, profile, feedback, analytics, classroom
 
 
 def _migrate_sqlite_columns():
@@ -96,6 +96,7 @@ app.include_router(vocabulary.router)
 app.include_router(translation.router)
 app.include_router(community.router)
 app.include_router(teacher.router)
+app.include_router(classroom.router)
 app.include_router(profile.router)
 app.include_router(feedback.router)
 app.include_router(analytics.router)

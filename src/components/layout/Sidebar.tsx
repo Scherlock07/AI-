@@ -4,7 +4,7 @@ import { useStore } from '@/store/useStore'
 import { useAuth } from '@/contexts/AuthContext'
 import {
   LayoutDashboard, Headphones, Mic, BookOpen, PenLine,
-  BookMarked, Languages, Users, GraduationCap, User,
+  BookMarked, Languages, Users, GraduationCap, User, School,
   ChevronLeft, Sparkles, LogOut, X,
 } from 'lucide-react'
 
@@ -17,6 +17,7 @@ const navItems = [
   { to: '/vocabulary', label: '词汇与语法', icon: BookMarked, group: 'tools' },
   { to: '/translation', label: '翻译练习', icon: Languages, group: 'tools' },
   { to: '/community', label: '学习社区', icon: Users, group: 'social' },
+  { to: '/my-classes', label: '我的班级', icon: School, group: 'social' },
   { to: '/teacher', label: '教师后台', icon: GraduationCap, group: 'social' },
   { to: '/profile', label: '学习档案', icon: User, group: 'social' },
 ]

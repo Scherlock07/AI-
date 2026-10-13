@@ -12,13 +12,41 @@ from app.auth.security import get_current_user, require_teacher
 router = APIRouter(prefix="/api/teacher", tags=["教师后台"])
 
 
+def _get_owned_class(class_id: str, user: User, db: Session) -> Class:
+    """获取班级并校验归属（防止跨教师越权操作）"""
+    cls = db.query(Class).filter(Class.id == class_id).first()
+    if not cls:
+        raise HTTPException(status_code=404, detail="班级不存在")
+    if cls.teacher_id != user.id:
+        raise HTTPException(status_code=403, detail="无权操作该班级")
+    return cls
+
+
 # ========== 班级管理 ==========
 
 @router.post("/classes", response_model=dict)
 async def create_class(name: str, description: str = "", db: Session = Depends(get_db), user: User = Depends(require_teacher)):
-    invite_code = secrets.token_hex(4).upper()
+    clean_name = (name or "").strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="班级名称不能为空")
+    if len(clean_name) > 50:
+        raise HTTPException(status_code=400, detail="班级名称不能超过 50 个字符")
+    dup = db.query(Class).filter(Class.teacher_id == user.id, Class.name == clean_name).first()
+    if dup:
+        raise HTTPException(status_code=409, detail="已存在同名班级，请换一个名称")
+
+    # 生成全局唯一邀请码
+    invite_code = ""
+    for _ in range(10):
+        candidate = secrets.token_hex(4).upper()
+        if not db.query(Class).filter(Class.invite_code == candidate).first():
+            invite_code = candidate
+            break
+    if not invite_code:
+        raise HTTPException(status_code=500, detail="邀请码生成失败，请重试")
+
     cls = Class(
-        name=name,
+        name=clean_name,
         description=description,
         teacher_id=user.id,
         invite_code=invite_code,
@@ -26,7 +54,12 @@ async def create_class(name: str, description: str = "", db: Session = Depends(g
     db.add(cls)
     db.commit()
     db.refresh(cls)
-    return {"id": cls.id, "name": cls.name, "invite_code": cls.invite_code}
+    return {
+        "id": cls.id,
+        "name": cls.name,
+        "description": cls.description,
+        "invite_code": cls.invite_code,
+    }
 
 
 @router.get("/classes", response_model=list[dict])
@@ -48,7 +81,8 @@ async def list_classes(db: Session = Depends(get_db), user: User = Depends(requi
 
 @router.get("/classes/{class_id}/students", response_model=list[dict])
 async def list_class_students(class_id: str, db: Session = Depends(get_db), user: User = Depends(require_teacher)):
-    members = db.query(ClassMember).filter(ClassMember.class_id == class_id).all()
+    cls = _get_owned_class(class_id, user, db)
+    members = db.query(ClassMember).filter(ClassMember.class_id == cls.id).all()
     result = []
     for m in members:
         student = db.query(User).filter(User.id == m.user_id).first()
@@ -63,6 +97,71 @@ async def list_class_students(class_id: str, db: Session = Depends(get_db), user
                 "joined_at": m.joined_at.isoformat() if m.joined_at else "",
             })
     return result
+
+
+@router.put("/classes/{class_id}", response_model=dict)
+async def update_class(
+    class_id: str, name: str = "", description: str = "",
+    db: Session = Depends(get_db), user: User = Depends(require_teacher),
+):
+    """修改班级名称与简介（仅班主任可操作）"""
+    cls = _get_owned_class(class_id, user, db)
+
+    new_name = (name or "").strip()
+    if name is not None and name != "" and not new_name:
+        raise HTTPException(status_code=400, detail="班级名称不能为空白字符")
+    if new_name:
+        if len(new_name) > 50:
+            raise HTTPException(status_code=400, detail="班级名称不能超过 50 个字符")
+        # 同一教师下不允许重名
+        dup = db.query(Class).filter(
+            Class.teacher_id == user.id,
+            Class.name == new_name,
+            Class.id != cls.id,
+        ).first()
+        if dup:
+            raise HTTPException(status_code=409, detail="已存在同名班级，请换一个名称")
+        cls.name = new_name
+
+    if description is not None and description != "":
+        cls.description = description.strip()[:500]
+
+    db.commit()
+    db.refresh(cls)
+    return {
+        "id": cls.id,
+        "name": cls.name,
+        "description": cls.description,
+        "invite_code": cls.invite_code,
+        "message": "班级信息已更新",
+    }
+
+
+@router.post("/classes/{class_id}/invite-code", response_model=dict)
+async def regenerate_invite_code(class_id: str, db: Session = Depends(get_db), user: User = Depends(require_teacher)):
+    """重新生成邀请码（原邀请码立即失效）"""
+    cls = _get_owned_class(class_id, user, db)
+    for _ in range(10):
+        code = secrets.token_hex(4).upper()
+        if not db.query(Class).filter(Class.invite_code == code).first():
+            cls.invite_code = code
+            db.commit()
+            db.refresh(cls)
+            return {"id": cls.id, "invite_code": cls.invite_code, "message": "邀请码已重置，原邀请码失效"}
+    raise HTTPException(status_code=500, detail="邀请码生成失败，请重试")
+
+
+@router.delete("/classes/{class_id}", response_model=dict)
+async def delete_class(class_id: str, db: Session = Depends(get_db), user: User = Depends(require_teacher)):
+    """解散班级，并清理成员、作业、课堂评分等关联数据"""
+    cls = _get_owned_class(class_id, user, db)
+
+    db.query(ClassMember).filter(ClassMember.class_id == cls.id).delete(synchronize_session=False)
+    db.query(Assignment).filter(Assignment.class_id == cls.id).delete(synchronize_session=False)
+    db.query(ClassroomSpeakingScore).filter(ClassroomSpeakingScore.class_id == cls.id).delete(synchronize_session=False)
+    db.delete(cls)
+    db.commit()
+    return {"id": class_id, "message": "班级已解散"}
 
 
 @router.get("/classes/{class_id}/stats", response_model=dict)
