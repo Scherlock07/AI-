@@ -362,6 +362,15 @@ export const teacherApi = {
 
   regenerateInviteCode: (classId: string) =>
     request(`/api/teacher/classes/${classId}/invite-code`, { method: 'POST' }),
+
+  classOverview: (classId: string, days: number = 30) =>
+    request(`/api/teacher/classes/${classId}/overview?days=${days}`),
+
+  studentProfile: (studentId: string, classId: string = '', days: number = 30) =>
+    request(`/api/teacher/students/${studentId}/profile?class_id=${encodeURIComponent(classId)}&days=${days}`),
+
+  analysisReport: (classId: string, days: number = 30, focus: string = '') =>
+    request(`/api/teacher/classes/${classId}/analysis-report?days=${days}&focus=${encodeURIComponent(focus)}`, { method: 'POST' }),
 }
 
 // ========== 学生班级 API ==========

@@ -2,6 +2,7 @@
 
 import json
 import secrets
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -203,6 +204,80 @@ async def class_stats(class_id: str, db: Session = Depends(get_db), user: User =
         "ability_radar": radar,
         "score_distribution": score_ranges,
         "avg_points": sum(s.total_points for s in students) / len(students) if students else 0,
+    }
+
+
+# ========== 学情分析 ==========
+
+@router.get("/classes/{class_id}/overview", response_model=dict)
+async def class_overview(
+    class_id: str, days: int = 30,
+    db: Session = Depends(get_db), user: User = Depends(require_teacher),
+):
+    """班级学情总览：各模块均分、成绩分布、预警学生、优秀学生、学生明细"""
+    cls = _get_owned_class(class_id, user, db)
+    days = max(7, min(days, 180))
+    from app.services.analytics_service import collect_class_overview
+    return collect_class_overview(cls, db, days)
+
+
+@router.get("/students/{student_id}/profile", response_model=dict)
+async def student_profile(
+    student_id: str, class_id: str = "", days: int = 30,
+    db: Session = Depends(get_db), user: User = Depends(require_teacher),
+):
+    """单个学生学情详情。若传 class_id 则校验该生确属此教师名下班级。"""
+    student = db.query(User).filter(User.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="学生不存在")
+
+    # 权限校验：该学生必须至少属于该教师的一个班级
+    owned_class_ids = [c.id for c in db.query(Class).filter(Class.teacher_id == user.id).all()]
+    if not owned_class_ids:
+        raise HTTPException(status_code=403, detail="你还没有创建任何班级")
+    if class_id:
+        if class_id not in owned_class_ids:
+            raise HTTPException(status_code=403, detail="无权查看该班级")
+        member = db.query(ClassMember).filter(
+            ClassMember.class_id == class_id, ClassMember.user_id == student_id
+        ).first()
+        if not member:
+            raise HTTPException(status_code=404, detail="该学生不在此班级中")
+    else:
+        member = db.query(ClassMember).filter(
+            ClassMember.class_id.in_(owned_class_ids), ClassMember.user_id == student_id
+        ).first()
+        if not member:
+            raise HTTPException(status_code=403, detail="该学生不在你的任何班级中")
+
+    days = max(7, min(days, 180))
+    from app.services.analytics_service import collect_student_profile
+    return collect_student_profile(student, db, days)
+
+
+@router.post("/classes/{class_id}/analysis-report", response_model=dict)
+async def class_analysis_report(
+    class_id: str, days: int = 30, focus: str = "", force: bool = False,
+    db: Session = Depends(get_db), user: User = Depends(require_teacher),
+):
+    """生成班级针对性学情分析报告（AI 基于真实数据生成，结果缓存）"""
+    cls = _get_owned_class(class_id, user, db)
+    days = max(7, min(days, 180))
+
+    from app.services.analytics_service import collect_class_overview
+    overview = collect_class_overview(cls, db, days)
+
+    from app.services import llm_service
+    report = await llm_service.generate_class_analysis_report(overview, focus=focus)
+
+    return {
+        "class_id": cls.id,
+        "class_name": cls.name,
+        "period_days": days,
+        "generated_at": datetime.utcnow().isoformat(),
+        "focus": focus,
+        "data_summary": overview.get("summary", {}),
+        "report": report,
     }
 
 

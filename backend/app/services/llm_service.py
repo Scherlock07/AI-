@@ -1788,3 +1788,263 @@ def _mock_ai_discussion_reply(topic: str, ai_name: str, messages: list[dict]) ->
         f"I'd push back on that slightly. The evidence suggests that a more nuanced approach would be more effective in practice.",
     ]
     return random.choice(replies)
+
+
+# ========== 班级学情分析报告 ==========
+
+_ANALYSIS_REPORT_SYSTEM = (
+    "你是一位外语教学教研专家，擅长基于班级真实学习数据撰写学情分析报告。"
+    "你的报告必须严格基于给定的数据，不得编造任何未提供的数据或事实。"
+    "若某模块数据缺失，应明确指出「该模块暂无数据」，而不是推测。"
+    "建议必须具体可执行，避免「加强练习」这类空泛表述。"
+    "严格按照要求的 JSON 格式输出，不要输出 JSON 之外的任何内容。"
+)
+
+
+def _build_class_data_digest(overview: dict) -> str:
+    """把班级学情数据压缩成给 LLM 的文本摘要（控制 token）"""
+    s = overview.get("summary", {})
+    lines = [
+        "【班级概况】",
+        "班级名称：%s" % overview.get("class_name", ""),
+        "统计周期：近 %d 天" % overview.get("period_days", 30),
+        "学生总数：%d 人（其中有练习记录 %d 人）" % (
+            overview.get("student_count", 0), overview.get("active_student_count", 0)),
+        "班级综合均分：%.1f" % s.get("class_avg", 0),
+        "累计练习时长：%d 分钟；人均 %.1f 分钟" % (
+            s.get("total_time", 0), s.get("avg_time_per_student", 0)),
+        "累计练习次数：%d 次" % s.get("total_exercises", 0),
+        "已布置作业：%d 项" % s.get("assignment_count", 0),
+        "",
+        "【各模块均分与投入】",
+    ]
+    for m in overview.get("module_scores", []):
+        lines.append("%s：均分 %.1f，累计 %d 分钟，%d 次练习" % (
+            m.get("label", m.get("module")), m.get("avg_score", 0),
+            m.get("study_time", 0), m.get("exercise_count", 0)))
+
+    lines.append("")
+    lines.append("【成绩分布】")
+    for b in overview.get("score_bands", []):
+        lines.append("%s：%d 人" % (b.get("band"), b.get("count")))
+
+    weak = overview.get("class_weak_modules", [])
+    lines.append("")
+    if weak:
+        lines.append("【班级共性薄弱模块（均分<70）】")
+        for w in weak:
+            lines.append("%s：均分 %.1f" % (w.get("label"), w.get("avg_score", 0)))
+    else:
+        lines.append("【班级共性薄弱模块】无（各模块均分均≥70 或数据不足）")
+
+    att = overview.get("need_attention", [])
+    lines.append("")
+    lines.append("【需重点关注学生】共 %d 人" % len(att))
+    for a in att[:10]:
+        lines.append("- %s：均分 %.1f，时长 %d 分钟；原因：%s" % (
+            a.get("name"), a.get("overall_avg", 0), a.get("total_time", 0),
+            "；".join(a.get("reasons", []))))
+
+    top = overview.get("top_students", [])
+    lines.append("")
+    if top:
+        lines.append("【表现优秀学生】共 %d 人" % len(top))
+        for t in top[:6]:
+            lines.append("- %s：均分 %.1f" % (t.get("name"), t.get("overall_avg", 0)))
+    else:
+        lines.append("【表现优秀学生】无（暂无均分≥85 的学生）")
+
+    # 学生个体薄弱模块明细（取前 12 人，用于生成个体建议）
+    students = overview.get("students", [])
+    if students:
+        lines.append("")
+        lines.append("【学生个体情况（前12人）】")
+        for p in students[:12]:
+            weaks = "、".join("%s(%.1f)" % (w["label"], w["avg_score"]) for w in p.get("weak_modules", []))
+            lines.append("- %s：综合 %.1f，时长 %d 分钟，薄弱：%s" % (
+                p.get("name"), p.get("summary", {}).get("overall_avg", 0),
+                p.get("summary", {}).get("total_time", 0),
+                weaks or "无明显薄弱模块"))
+    return "\n".join(lines)
+
+
+async def generate_class_analysis_report(overview: dict, focus: str = "") -> dict:
+    """基于班级真实学情数据生成针对性分析报告"""
+    digest = _build_class_data_digest(overview)
+
+    if not settings.LLM_API_KEY:
+        return _mock_class_report(overview)
+
+    focus_line = "【本次重点关注方向】%s\n\n" % focus if focus.strip() else ""
+
+    user_msg = f"""{focus_line}以下是班级真实学习数据（请严格基于这些数据撰写，不得编造）：
+
+{digest}
+
+【报告要求】
+1. 总体诊断：基于综合均分、活跃度、练习量，判断班级整体学情水平与主要特征；
+2. 模块分析：逐一点评各模块表现，指出班级共性薄弱环节，并说明数据依据（引用具体均分）；
+3. 学生分层：根据成绩分布与个体数据，把学生分为需要重点关注 / 稳步提升 / 表现优秀三类，每类给出代表性学生与判断依据；
+4. 针对性教学建议：针对第 2、3 步发现的问题，给出 3-5 条具体可落地的教学干预措施（说明针对谁、解决什么问题、如何操作）；
+5. 后续跟进重点：指出下一周期应重点观察的指标。
+
+【输出 JSON】
+{{"overall_diagnosis":"总体诊断文本（150-250字）",
+"module_analysis":[{{"module":"听力","status":"良好/待提升/无数据","analysis":"该模块分析（80-150字，须引用具体数据）"}}],
+"student_layering":{{"attention":{{"summary":"该层次整体特征","students":["姓名1","姓名2"],"actions":"针对该层次的干预建议"}},
+"improving":{{"summary":"...","students":["..."],"actions":"..."}},
+"excellent":{{"summary":"...","students":["..."],"actions":"..."}}}},
+"teaching_suggestions":[{{"title":"建议标题","problem":"对应的问题（引用数据）","action":"具体操作步骤","target":"适用对象","priority":"高/中/低"}}],
+"follow_up_metrics":["下一周期重点观察指标1","指标2"],
+"data_notes":["数据说明或局限性，如某些模块样本不足"]}}"""
+
+    result, _hit = await cached_json(
+        "class_analysis_report",
+        [overview.get("class_id", ""), str(overview.get("period_days", 30)), focus,
+         str(overview.get("summary", {})), str(overview.get("score_bands", []))],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": _ANALYSIS_REPORT_SYSTEM},
+                {"role": "user", "content": user_msg},
+            ],
+            lambda: _mock_class_report(overview),
+            max_tokens=3000,
+        ),
+    )
+    return result
+
+
+def _mock_class_report(overview: dict) -> dict:
+    """无 API key 时的降级报告：仍基于真实数据，但用规则模板组织"""
+    s = overview.get("summary", {})
+    class_avg = s.get("class_avg", 0)
+    weak = overview.get("class_weak_modules", [])
+    att = overview.get("need_attention", [])
+    top = overview.get("top_students", [])
+    total = overview.get("student_count", 0)
+    active = overview.get("active_student_count", 0)
+
+    if class_avg >= 85:
+        level_desc = "班级整体表现优秀"
+    elif class_avg >= 70:
+        level_desc = "班级整体处于良好水平"
+    elif class_avg >= 60:
+        level_desc = "班级整体处于及格水平，仍有较大提升空间"
+    elif class_avg > 0:
+        level_desc = "班级整体成绩偏低，亟需重点干预"
+    else:
+        level_desc = "班级暂无有效练习数据，无法进行水平评估"
+
+    overall = (
+        "近 %d 天内，本班共 %d 名学生，其中 %d 人有练习记录，班级综合均分 %.1f，%s。"
+        "累计练习时长 %d 分钟，人均 %.1f 分钟，累计完成练习 %d 次。%s"
+        % (
+            overview.get("period_days", 30), total, active, class_avg, level_desc,
+            s.get("total_time", 0), s.get("avg_time_per_student", 0),
+            s.get("total_exercises", 0),
+            "需重点关注的学生共 %d 人。" % len(att) if att else "全体学生均无明显预警。",
+        )
+    )
+
+    module_analysis = []
+    for m in overview.get("module_scores", []):
+        avg = m.get("avg_score", 0)
+        if avg <= 0:
+            status = "无数据"
+            analysis = "%s模块在当前周期内没有产生评分数据，可能是学生尚未开展该模块练习，或练习未形成有效评分。建议先确认学生是否知晓该模块的入口。" % m.get("label")
+        elif avg >= 85:
+            status = "优秀"
+            analysis = "%s模块均分 %.1f，处于优秀水平，累计投入 %d 分钟、%d 次练习。该模块可作为班级的优势项目保持。" % (
+                m.get("label"), avg, m.get("study_time", 0), m.get("exercise_count", 0))
+        elif avg >= 70:
+            status = "良好"
+            analysis = "%s模块均分 %.1f，表现良好，累计投入 %d 分钟。仍有提升空间，可通过增加练习频次巩固。" % (
+                m.get("label"), avg, m.get("study_time", 0))
+        else:
+            status = "待提升"
+            analysis = "%s模块均分仅 %.1f，明显低于合格线，是班级的共性薄弱环节。累计投入 %d 分钟，建议优先排查该模块的练习方式与投入强度。" % (
+                m.get("label"), avg, m.get("study_time", 0))
+        module_analysis.append({"module": m.get("label"), "status": status, "analysis": analysis})
+
+    suggestions = []
+    if weak:
+        names = "、".join(w.get("label", "") for w in weak[:3])
+        suggestions.append({
+            "title": "集中突破班级共性薄弱模块",
+            "problem": "以下模块均分低于 70：%s" % names,
+            "action": "针对这些模块安排专项训练：先在课堂上做一次集中讲解，再布置对应模块的定向作业，要求在 2 周内完成至少 3 次练习。",
+            "target": "全班学生",
+            "priority": "高",
+        })
+    if att:
+        suggestions.append({
+            "title": "重点跟踪预警学生",
+            "problem": "有 %d 名学生出现无练习记录、均分偏低或投入不足的情况" % len(att),
+            "action": "逐一了解原因：对无记录学生确认是否存在登录或使用障碍；对均分偏低学生调整练习难度至基础档，先从低难度任务重建信心；对投入不足学生设定每周最低练习时长要求。",
+            "target": "、".join(a.get("name", "") for a in att[:5]),
+            "priority": "高",
+        })
+    if active < total:
+        suggestions.append({
+            "title": "提升班级练习参与度",
+            "problem": "班级 %d 人中有 %d 人在统计周期内没有练习记录，参与率仅 %.0f%%" % (
+                total, total - active, (active / total * 100) if total else 0),
+            "action": "通过班级群告知练习入口与本周任务要求，并设置阶段性检查点，对完成情况在班级内公示以形成正向激励。",
+            "target": "未参与练习的学生",
+            "priority": "中",
+        })
+    if top:
+        suggestions.append({
+            "title": "发挥优秀学生示范作用",
+            "problem": "班级有 %d 名学生综合均分达到 85 以上" % len(top),
+            "action": "邀请这些学生分享学习方法，或安排其与薄弱学生结对互助，同时为其提供更高难度的挑战性任务以保持学习动力。",
+            "target": "、".join(t.get("name", "") for t in top[:5]),
+            "priority": "低",
+        })
+    if not suggestions:
+        suggestions.append({
+            "title": "先建立练习数据基础",
+            "problem": "当前班级尚无有效练习数据，无法定位具体问题",
+            "action": "先确认学生已正确加入班级并知晓各模块入口，安排一次覆盖听说读写的完整练习任务，待数据积累后再做针对性分析。",
+            "target": "全班学生",
+            "priority": "高",
+        })
+
+    attention_names = [a.get("name", "") for a in att if a.get("overall_avg", 0) > 0]
+    middle_names = [
+        p.get("name", "") for p in overview.get("students", [])
+        if 60 <= p.get("summary", {}).get("overall_avg", 0) < 85
+    ]
+    excellent_names = [t.get("name", "") for t in top]
+
+    return {
+        "overall_diagnosis": overall,
+        "module_analysis": module_analysis,
+        "student_layering": {
+            "attention": {
+                "summary": "该层次学生在练习参与度、投入时长或成绩上存在明显短板，合计 %d 人。" % len(att),
+                "students": attention_names,
+                "actions": "优先安排一对一沟通，明确具体短板后从基础难度任务入手，设定每周可达成的小目标并跟踪反馈。",
+            },
+            "improving": {
+                "summary": "该层次学生成绩处于中间区间，具备较大提升潜力，合计 %d 人。" % len(middle_names),
+                "students": middle_names,
+                "actions": "针对其各自的最弱模块布置定向练习，鼓励其在保持现有投入的基础上适度增加练习频次。",
+            },
+            "excellent": {
+                "summary": "该层次学生综合表现突出，合计 %d 人。" % len(excellent_names),
+                "students": excellent_names,
+                "actions": "提供高难度挑战任务维持学习动力，并安排其参与互助或经验分享。",
+            },
+        },
+        "teaching_suggestions": suggestions,
+        "follow_up_metrics": [
+            "各模块均分变化趋势（重点关注薄弱模块是否回升）",
+            "班级练习参与率与人均练习时长",
+            "预警学生的练习记录恢复情况",
+        ],
+        "data_notes": [
+            "本报告基于平台记录的练习数据自动生成，统计周期为近 %d 天。" % overview.get("period_days", 30),
+            "未产生评分数据的模块不计入薄弱判断，其分析仅供参考。",
+        ],
+    }

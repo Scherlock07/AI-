@@ -9,6 +9,8 @@ import { Skeleton, ErrorState, EmptyState, LoadingSpinner } from '@/components/u
 import { cn, getScoreColor } from '@/lib/utils'
 import { FeedbackView } from './FeedbackView'
 import { AnalyticsView } from './AnalyticsView'
+import { ClassAnalyticsView } from './ClassAnalyticsView'
+import { StudentDetailDrawer } from './StudentDetailDrawer'
 import {
   GraduationCap, Users, FileText, TrendingUp, Download,
   Bell, ClipboardList, BarChart3, Settings, Plus,
@@ -21,7 +23,7 @@ import {
   ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, Radar,
 } from 'recharts'
 
-type ViewType = 'classes' | 'feedback' | 'analytics'
+type ViewType = 'classes' | 'analysis' | 'feedback' | 'analytics'
 
 export function TeacherDashboard() {
   const { toast } = useToast()
@@ -46,6 +48,12 @@ export function TeacherDashboard() {
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; member_count: number } | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [regenLoading, setRegenLoading] = useState(false)
+
+  // 学生详情抽屉
+  const [detailStudent, setDetailStudent] = useState<{ id: string; name: string } | null>(null)
+
+  // 班级学情概览（用于班级能力雷达）
+  const [analytics, setAnalytics] = useState<any>(null)
 
   const currentClass = classes.find((c) => c.id === selectedClass) || null
 
@@ -173,6 +181,9 @@ export function TeacherDashboard() {
   useEffect(() => {
     if (selectedClass) {
       fetchClassData(selectedClass)
+      teacherApi.classOverview(selectedClass, 30)
+        .then((res: any) => setAnalytics(res))
+        .catch(() => setAnalytics(null))
     }
   }, [selectedClass])
 
@@ -227,14 +238,27 @@ export function TeacherDashboard() {
     { range: '<60', count: students.filter((s: any) => (s.avg_score || s.avgScore || 0) < 60).length },
   ]
 
-  const classRadar = [
-    { subject: '听力', score: 80 },
-    { subject: '口语', score: 72 },
-    { subject: '阅读', score: 85 },
-    { subject: '写作', score: 78 },
-    { subject: '翻译', score: 75 },
-    { subject: '词汇', score: 82 },
-  ]
+  // 班级能力雷达：优先用学情接口返回的真实模块均分，缺失时回退到学生平均分
+  const classRadar = (() => {
+    const moduleScores = analytics?.module_scores || null
+    const hasReal = moduleScores && moduleScores.some((m: any) => (m.avg_score || 0) > 0)
+    if (hasReal) {
+      return moduleScores.map((m: any) => ({ subject: m.label, score: Math.round(m.avg_score || 0) }))
+    }
+    const fallback = students.length
+      ? Math.round(students.reduce((a: number, s: any) => a + (s.avg_score || s.avgScore || 0), 0) / students.length)
+      : 0
+    return [
+      { subject: '听力', score: fallback },
+      { subject: '口语', score: fallback },
+      { subject: '阅读', score: fallback },
+      { subject: '写作', score: fallback },
+      { subject: '翻译', score: fallback },
+      { subject: '词汇', score: fallback },
+    ]
+  })()
+
+  const hasRadarData = classRadar.some((d: { score: number }) => d.score > 0)
 
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto animate-fadeIn">
@@ -256,6 +280,7 @@ export function TeacherDashboard() {
       <div className="flex gap-1 mb-6 p-1 bg-gray-100 rounded-xl w-fit">
         {[
           { value: 'classes' as ViewType, label: '班级管理', icon: LayoutGrid },
+          { value: 'analysis' as ViewType, label: '学情分析', icon: TrendingUp },
           { value: 'feedback' as ViewType, label: '意见反馈', icon: MessageSquarePlus },
           { value: 'analytics' as ViewType, label: '使用数据', icon: Activity },
         ].map((tab) => {
@@ -278,6 +303,46 @@ export function TeacherDashboard() {
 
       {view === 'feedback' && <FeedbackView />}
       {view === 'analytics' && <AnalyticsView />}
+      {view === 'analysis' && (
+        classes.length === 0 ? (
+          <Card>
+            <CardContent className="pt-5">
+              <EmptyState
+                icon={<GraduationCap className="w-8 h-8 text-gray-300" />}
+                title="暂无可分析的班级"
+                desc="请先在「班级管理」中创建班级，学生加入后即可查看学情分析"
+              />
+            </CardContent>
+          </Card>
+        ) : (
+          <>
+            {classes.length > 1 && (
+              <div className="flex gap-2 mb-4 flex-wrap">
+                {classes.map((c) => (
+                  <button key={c.id} onClick={() => setSelectedClass(c.id)}
+                    className={cn('px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
+                      selectedClass === c.id ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200')}>
+                    {c.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            {currentClass ? (
+              <ClassAnalyticsView
+                classId={currentClass.id}
+                className={currentClass.name}
+                onOpenStudent={(id, name) => setDetailStudent({ id, name })}
+              />
+            ) : (
+              <Card>
+                <CardContent className="pt-5">
+                  <EmptyState title="请选择班级" desc="选择一个班级查看学情分析" />
+                </CardContent>
+              </Card>
+            )}
+          </>
+        )
+      )}
       {view === 'classes' && (
         <>
       {showCreate && (
@@ -453,7 +518,10 @@ export function TeacherDashboard() {
                           <div className="text-sm font-medium text-gray-700">{tasks}</div>
                           <div className="text-xs text-gray-400">已完成</div>
                         </div>
-                        <Button size="sm" variant="ghost" onClick={() => toast('学生详情页面开发中', 'info')}>详情</Button>
+                        <Button size="sm" variant="ghost" onClick={() => setDetailStudent({
+                          id: s.id || s.student_id,
+                          name: s.display_name || s.name || s.username || '匿名学生',
+                        })}>详情</Button>
                       </div>
                     )
                   })}
@@ -491,14 +559,18 @@ export function TeacherDashboard() {
                 <CardTitle>班级能力分布</CardTitle>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={240}>
-                  <RadarChart data={classRadar}>
-                    <PolarGrid stroke="#e5e7eb" />
-                    <PolarAngleAxis dataKey="subject" tick={{ fontSize: 12, fill: '#6b7280' }} />
-                    <Radar dataKey="score" stroke="#a855f7" fill="#a855f7" fillOpacity={0.3} strokeWidth={2} />
-                    <Tooltip contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb', fontSize: '12px' }} />
-                  </RadarChart>
-                </ResponsiveContainer>
+                {!hasRadarData ? (
+                  <EmptyState title="暂无能力数据" desc="学生完成各模块练习后将显示能力分布" />
+                ) : (
+                  <ResponsiveContainer width="100%" height={240}>
+                    <RadarChart data={classRadar}>
+                      <PolarGrid stroke="#e5e7eb" />
+                      <PolarAngleAxis dataKey="subject" tick={{ fontSize: 12, fill: '#6b7280' }} />
+                      <Radar dataKey="score" stroke="#a855f7" fill="#a855f7" fillOpacity={0.3} strokeWidth={2} />
+                      <Tooltip contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb', fontSize: '12px' }} />
+                    </RadarChart>
+                  </ResponsiveContainer>
+                )}
               </CardContent>
             </Card>
 
@@ -623,6 +695,16 @@ export function TeacherDashboard() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* 学生学情详情抽屉 */}
+      {detailStudent && currentClass && (
+        <StudentDetailDrawer
+          studentId={detailStudent.id}
+          studentName={detailStudent.name}
+          classId={currentClass.id}
+          onClose={() => setDetailStudent(null)}
+        />
       )}
     </div>
   )
