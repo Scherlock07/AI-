@@ -15,6 +15,9 @@ class TranslationGradeResult(BaseModel):
     reference_translation: str
     improvement_suggestions: str
     translation_tips: list[str] = []
+    # 译文是否已达到无需改进的水准（true 时前端展示达标徽章）
+    # 注意：LLM prompt 已输出该字段，但若 schema 不声明会被 pydantic 丢弃
+    optimal: bool = False
 
 
 class StudyGroupCreate(BaseModel):
