@@ -11,6 +11,7 @@ import { Progress } from '@/components/ui/Progress'
 import { Skeleton, ErrorState, EmptyState, LoadingSpinner } from '@/components/ui/Loading'
 import { cn, formatDuration, getScoreColor } from '@/lib/utils'
 import { formatClock, humanDuration, formatDateTime } from '@/lib/usePracticeTimer'
+import { detectMicCapability } from '@/lib/recording'
 import {
   Mic, Play, Pause, Square, Users, Bot,
   Presentation, MessagesSquare, Repeat, GraduationCap, BookOpen,
@@ -82,9 +83,10 @@ function RecordingPanel({ title, topic, onResult }: { title: string; topic: stri
   const [transcript, setTranscript] = useState('')
   const [interim, setInterim] = useState('')
   const [finished, setFinished] = useState(false)
-  const [srSupported] = useState(() =>
-    typeof window !== 'undefined' && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
-  )
+  // 录音可用性判据：必须看安全上下文，不能用「构造函数是否存在」
+  // （HTTP 下 window.webkitSpeechRecognition 仍存在，用它判断会误入假录音态）
+  const [cap] = useState(() => detectMicCapability())
+  const srSupported = cap.canLiveTranscribe
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const recognitionRef = useRef<any>(null)
   const transcriptRef = useRef('')
@@ -127,12 +129,21 @@ function RecordingPanel({ title, topic, onResult }: { title: string; topic: stri
         setInterim(interimText)
       }
       rec.onerror = (e: any) => {
-        if (e?.error === 'not-allowed' || e?.error === 'service-not-allowed') {
-          toast('麦克风权限被拒绝，无法实时转写', 'error')
-        } else if (e?.error === 'no-speech') {
+        const code = e?.error
+        if (code === 'not-allowed' || code === 'service-not-allowed') {
+          // 采集被浏览器拒绝：必须立即退出录音态。
+          // 否则按钮保持红脉冲、计时器继续走、文案仍写「正在录音并实时转写…」，
+          // 界面与刚弹出的错误提示自相矛盾，学生只会看到「点了在录、其实没录」，
+          // 进而反馈为「麦克风权限没有打开」。现在改为立即停表并切到手动输入。
+          stopRecognition()
+          setIsRecording(false)
+          setInterim('')
+          setFinished(true)
+          toast(cap.message, 'error')
+        } else if (code === 'no-speech') {
           // 静默处理，continuous 模式下会自动继续
         } else {
-          toast(`语音识别出错：${e?.error || '未知错误'}，可停止后手动输入转写文本`, 'warning')
+          toast(`语音识别出错：${code || '未知错误'}，可停止后手动输入转写文本`, 'warning')
         }
       }
       rec.onend = () => {
@@ -160,6 +171,13 @@ function RecordingPanel({ title, topic, onResult }: { title: string; topic: stri
 
   const handleMicClick = () => {
     if (!isRecording) {
+      // 非安全上下文（如以 HTTP 访问）下浏览器不会弹出麦克风授权框，
+      // 因此不得进入录音态——直接给出准确原因并切到手动输入模式。
+      if (!cap.canCapture) {
+        toast(cap.message, 'warning')
+        setFinished(true)
+        return
+      }
       setIsRecording(true)
       setDuration(0)
       setTranscript('')
@@ -167,7 +185,7 @@ function RecordingPanel({ title, topic, onResult }: { title: string; topic: stri
       transcriptRef.current = ''
       setFinished(false)
       if (srSupported && !startRecognition()) {
-        toast('语音识别启动失败，请录音后手动输入转写文本', 'warning')
+        toast('语音识别启动失败，请在下方手动输入转写文本', 'warning')
       }
     } else {
       setIsRecording(false)
@@ -196,15 +214,24 @@ function RecordingPanel({ title, topic, onResult }: { title: string; topic: stri
         <div className="flex flex-col items-center py-8">
           <button
             onClick={handleMicClick}
+            aria-label={cap.canCapture ? '开始录音' : '录音不可用，请手动输入'}
             className={cn(
               'w-20 h-20 rounded-full flex items-center justify-center transition-all',
-              isRecording ? 'bg-red-500 animate-recording' : 'bg-indigo-600 hover:bg-indigo-700'
+              isRecording
+                ? 'bg-red-500 animate-recording'
+                : cap.canCapture
+                  ? 'bg-indigo-600 hover:bg-indigo-700'
+                  : 'bg-gray-300 cursor-not-allowed'
             )}
           >
             {isRecording ? <Square className="w-8 h-8 text-white" /> : <Mic className="w-8 h-8 text-white" />}
           </button>
           <p className="mt-4 text-sm text-gray-500">
-            {isRecording ? (srSupported ? '正在录音并实时转写...' : '正在录音（请同时记录你的口述内容）') : '点击开始录音'}
+            {isRecording
+              ? cap.hint
+              : cap.canCapture
+                ? '点击开始录音'
+                : '录音功能当前不可用，请手动输入'}
           </p>
           <div className="mt-2 text-2xl font-mono font-bold text-gray-900">
             {formatDuration(duration)}
@@ -224,12 +251,12 @@ function RecordingPanel({ title, topic, onResult }: { title: string; topic: stri
             </div>
           )}
 
-          {/* 实时转写展示 */}
-          {(isRecording || finished) && (
+          {/* 实时转写展示（录音不可用时也直接展示手动输入，避免学生无路可走） */}
+          {(isRecording || finished || !cap.canCapture) && (
             <div className="mt-6 w-full">
               <div className="flex items-center justify-between mb-1.5">
                 <p className="text-xs font-medium text-gray-500">
-                  {srSupported ? '实时转写（AI 评分将基于以下真实内容）' : '转写文本（请输入你刚才口述的内容）'}
+                  {cap.transcriptLabel}
                 </p>
                 {srSupported && (
                   <button
@@ -250,11 +277,16 @@ function RecordingPanel({ title, topic, onResult }: { title: string; topic: stri
                 placeholder={srSupported ? '开始说话后，转写内容会实时显示在这里（可停止后修正）' : '录音结束后，请在这里输入你口述的英文内容'}
                 className="w-full min-h-[110px] px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400 resize-y bg-gray-50"
               />
-              {!srSupported && (
+              {!cap.canCapture ? (
+                <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+                  <p className="text-xs text-amber-700 leading-relaxed">{cap.message}</p>
+                </div>
+              ) : !srSupported ? (
                 <p className="text-xs text-gray-400 mt-1">
                   当前浏览器不支持实时语音识别（建议使用 Chrome / Edge），可直接输入口述内容进行评分。
                 </p>
-              )}
+              ) : null}
               <Button className="mt-3 w-full" onClick={handleSubmit} disabled={!(transcriptRef.current || transcript).trim()}>
                 <CheckCircle2 className="w-4 h-4" />
                 提交转写内容，AI 评分
