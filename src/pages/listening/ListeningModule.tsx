@@ -11,7 +11,7 @@ import { speak, stop, accentToLang, speakDialogue, stripSpeakerLabels } from '@/
 import {
   Headphones, Upload, Play, Pause, Volume2,
   Sparkles, FileAudio, BookMarked, Repeat, SkipBack, SkipForward,
-  Mic, PenLine, Waves, Trash2,
+  Mic, PenLine, Waves, Trash2, Check,
 } from 'lucide-react'
 
 type TabType = 'library' | 'generate' | 'practice' | 'vocab'
@@ -1411,7 +1411,7 @@ function VocabPracticeView() {
     sentence_words: { word: string; hint: string }[]
   } | null>(null)
 
-  const [exerciseTab, setExerciseTab] = useState<'cloze' | 'matching' | 'sentence'>('cloze')
+  const [exerciseTab, setExerciseTab] = useState<'cloze' | 'matching' | 'sentence' | 'summary'>('cloze')
 
   // ===== 选词填空 =====
   const [clozePicks, setClozePicks] = useState<(string | null)[]>([])
@@ -1422,10 +1422,10 @@ function VocabPracticeView() {
   const [matchPicks, setMatchPicks] = useState<Record<string, string>>({})
   const [matchChecked, setMatchChecked] = useState(false)
 
-  // ===== 造句练习 =====
-  const [sentenceWord, setSentenceWord] = useState('')
-  const [sentenceText, setSentenceText] = useState('')
-  const [sentenceResult, setSentenceResult] = useState<any>(null)
+  // ===== 造句练习（支持批量）=====
+  const [selectedWords, setSelectedWords] = useState<string[]>([])
+  const [sentenceInputs, setSentenceInputs] = useState<Record<string, string>>({})
+  const [sentenceResults, setSentenceResults] = useState<Record<string, any>>({})
   const [sentenceLoading, setSentenceLoading] = useState(false)
 
   const handlePronounce = (word: string) => {
@@ -1465,9 +1465,9 @@ function VocabPracticeView() {
       setMatchDefs(shuffle((res.matching || []).map(m => m.definition)))
       setMatchPicks({})
       setMatchChecked(false)
-      setSentenceWord(res.sentence_words?.[0]?.word || '')
-      setSentenceText('')
-      setSentenceResult(null)
+      setSelectedWords([])
+      setSentenceInputs({})
+      setSentenceResults({})
       toast('练习已生成', 'success')
     } catch (err: any) {
       toast(err?.message || '生成失败，请稍后重试', 'error')
@@ -1476,16 +1476,27 @@ function VocabPracticeView() {
     }
   }
 
-  const handleGradeSentence = async () => {
-    if (!sentenceWord || !sentenceText.trim()) {
-      toast('请选择词汇并输入你的造句', 'warning')
+  const toggleWord = (word: string) => {
+    setSelectedWords(prev =>
+      prev.includes(word) ? prev.filter(w => w !== word) : [...prev, word],
+    )
+  }
+
+  const handleGradeBatch = async () => {
+    const items = selectedWords
+      .map(w => ({ word: w, sentence: (sentenceInputs[w] || '').trim() }))
+      .filter(it => it.sentence)
+    if (items.length === 0) {
+      toast('请至少为 1 个词汇填写造句', 'warning')
       return
     }
     setSentenceLoading(true)
-    setSentenceResult(null)
     try {
-      const res = await listeningApi.vocabGrade({ word: sentenceWord, sentence: sentenceText.trim() })
-      setSentenceResult(res)
+      const res = await listeningApi.vocabGradeBatch(items)
+      const map: Record<string, any> = {}
+      for (const r of res?.results || []) map[r.word] = r
+      setSentenceResults(prev => ({ ...prev, ...map }))
+      toast(`已评阅 ${Object.keys(map).length} 句`, 'success')
     } catch (err: any) {
       toast(err?.message || '评阅失败，请稍后重试', 'error')
     } finally {
@@ -1494,6 +1505,27 @@ function VocabPracticeView() {
   }
 
   const clozeCorrect = exercises?.cloze.filter((c, i) => clozePicks[i] === c.answer).length || 0
+  const clozeTotal = exercises?.cloze.length || 0
+  const matchCorrect = exercises?.matching.filter(m => matchPicks[m.word] === m.definition).length || 0
+  const matchTotal = exercises?.matching.length || 0
+
+  // 汇总：已评阅造句的平均分
+  const gradedSentences = Object.values(sentenceResults)
+  const sentenceAvg = gradedSentences.length
+    ? Math.round(gradedSentences.reduce((s: number, r: any) => s + (r.score || 0), 0) / gradedSentences.length)
+    : 0
+
+  // 错题清单
+  const clozeWrong = (exercises?.cloze || [])
+    .map((c, i) => ({ ...c, picked: clozePicks[i] }))
+    .filter(c => clozeChecked && c.picked !== c.answer)
+  const matchWrong = (exercises?.matching || []).filter(
+    m => matchChecked && matchPicks[m.word] !== m.definition,
+  )
+  const sentenceWrong = gradedSentences.filter((r: any) => !r.correct_usage || (r.score || 0) < 70)
+
+  // 生词清单：全部目标词 + 释义
+  const allWords = exercises?.matching || []
 
   return (
     <div className="space-y-4">
@@ -1539,11 +1571,12 @@ function VocabPracticeView() {
           <CardHeader>
             <div className="flex items-center justify-between flex-wrap gap-2">
               <CardTitle>词汇练习</CardTitle>
-              <div className="flex gap-1 bg-gray-100 p-1 rounded-xl">
+              <div className="flex gap-1 bg-gray-100 p-1 rounded-xl flex-wrap">
                 {[
                   { key: 'cloze' as const, label: '选词填空' },
                   { key: 'matching' as const, label: '释义匹配' },
                   { key: 'sentence' as const, label: '造句练习' },
+                  { key: 'summary' as const, label: '汇总报告' },
                 ].map(t => (
                   <button
                     key={t.key}
@@ -1603,7 +1636,7 @@ function VocabPracticeView() {
                   ) : (
                     <>
                       <span className="text-sm font-medium text-gray-700">
-                        得分：{clozeCorrect} / {exercises.cloze.length}
+                        得分：{clozeCorrect} / {clozeTotal}
                       </span>
                       <Button variant="outline" onClick={() => { setClozePicks(new Array(exercises.cloze.length).fill(null)); setClozeChecked(false) }}>
                         重做
@@ -1617,7 +1650,7 @@ function VocabPracticeView() {
             {/* ===== 释义匹配 ===== */}
             {exerciseTab === 'matching' && (
               <div className="space-y-4">
-                {exercises.matching?.map((m, i) => {
+                {exercises.matching?.map((m) => {
                   const picked = matchPicks[m.word]
                   const correct = picked === m.definition
                   return (
@@ -1659,7 +1692,7 @@ function VocabPracticeView() {
                   ) : (
                     <>
                       <span className="text-sm font-medium text-gray-700">
-                        得分：{exercises.matching.filter(m => matchPicks[m.word] === m.definition).length} / {exercises.matching.length}
+                        得分：{matchCorrect} / {matchTotal}
                       </span>
                       <Button variant="outline" onClick={() => { setMatchPicks({}); setMatchChecked(false) }}>
                         重做
@@ -1670,66 +1703,193 @@ function VocabPracticeView() {
               </div>
             )}
 
-            {/* ===== 造句练习 ===== */}
+            {/* ===== 造句练习（批量） ===== */}
             {exerciseTab === 'sentence' && (
               <div className="space-y-4">
-                <div>
-                  <label className="text-sm font-medium text-gray-700 mb-2 block">选择要练习的词汇</label>
-                  <div className="flex gap-2 flex-wrap">
-                    {exercises.sentence_words?.map((s) => (
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div>
+                    <label className="text-sm font-medium text-gray-700 block">选择要练习的词汇（可多选）</label>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      已选 {selectedWords.length} 个 · 可一次批量为多个词造句，提交后统一评阅
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setSelectedWords((exercises.sentence_words || []).map(s => s.word))}
+                      className="text-xs text-indigo-600 hover:text-indigo-700"
+                    >
+                      全选
+                    </button>
+                    <button
+                      onClick={() => setSelectedWords([])}
+                      className="text-xs text-gray-400 hover:text-gray-600"
+                    >
+                      清空
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex gap-2 flex-wrap">
+                  {(exercises.sentence_words || []).map((s) => {
+                    const on = selectedWords.includes(s.word)
+                    return (
                       <button
                         key={s.word}
-                        onClick={() => { setSentenceWord(s.word); setSentenceResult(null) }}
+                        onClick={() => toggleWord(s.word)}
                         title={s.hint}
                         className={cn(
-                          'px-3 py-1.5 text-sm rounded-lg border transition-all',
-                          sentenceWord === s.word
+                          'px-3 py-1.5 text-sm rounded-lg border transition-all inline-flex items-center gap-1',
+                          on
                             ? 'border-indigo-400 bg-indigo-50 text-indigo-700 font-medium'
                             : 'border-gray-200 hover:border-indigo-300 text-gray-600',
                         )}
                       >
+                        {on && <Check className="w-3.5 h-3.5" />}
                         {s.word}
                       </button>
-                    ))}
-                  </div>
-                  {sentenceWord && (
-                    <p className="mt-2 text-xs text-gray-400">
-                      提示：{exercises.sentence_words.find(s => s.word === sentenceWord)?.hint}
-                    </p>
-                  )}
+                    )
+                  })}
                 </div>
-                <textarea
-                  value={sentenceText}
-                  onChange={(e) => setSentenceText(e.target.value)}
-                  placeholder={sentenceWord ? `用 "${sentenceWord}" 造一个完整的英文句子...` : '先选择上方词汇'}
-                  disabled={!sentenceWord}
-                  rows={3}
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400 resize-none"
-                />
-                <Button onClick={handleGradeSentence} disabled={sentenceLoading || !sentenceWord || !sentenceText.trim()}>
-                  {sentenceLoading ? <LoadingSpinner size="sm" /> : <Sparkles className="w-4 h-4" />}
-                  {sentenceLoading ? 'AI 评阅中...' : '提交 AI 评阅'}
-                </Button>
 
-                {sentenceResult && (
-                  <div className="p-4 border rounded-xl space-y-2">
-                    <div className="flex items-center gap-2">
-                      <span className={cn('text-2xl font-bold', sentenceResult.score >= 80 ? 'text-green-600' : sentenceResult.score >= 60 ? 'text-amber-500' : 'text-red-500')}>
-                        {sentenceResult.score}
-                      </span>
-                      <span className="text-sm text-gray-400">/ 100</span>
-                      <Badge variant={sentenceResult.correct_usage ? 'success' : 'danger'}>
-                        {sentenceResult.correct_usage ? '词汇用法正确' : '词汇用法有误'}
-                      </Badge>
-                    </div>
-                    <p className="text-sm text-gray-700">{sentenceResult.feedback}</p>
-                    {sentenceResult.improved && (
-                      <div className="p-2 bg-indigo-50 rounded-lg">
-                        <p className="text-xs text-indigo-500 mb-0.5">改进建议</p>
-                        <p className="text-sm text-gray-700 italic">{sentenceResult.improved}</p>
-                      </div>
-                    )}
+                {selectedWords.length === 0 ? (
+                  <p className="text-sm text-gray-400 py-4 text-center">请先选择至少一个词汇</p>
+                ) : (
+                  <div className="space-y-3">
+                    {selectedWords.map(w => {
+                      const hint = (exercises.sentence_words || []).find(s => s.word === w)?.hint
+                      const r = sentenceResults[w]
+                      return (
+                        <div key={w} className="p-3 border border-gray-100 rounded-xl">
+                          <div className="flex items-center justify-between mb-2">
+                            <button
+                              onClick={() => handlePronounce(w)}
+                              className="flex items-center gap-1 text-sm font-semibold text-gray-900 hover:text-indigo-600"
+                            >
+                              <Volume2 className="w-3.5 h-3.5 text-gray-400" />
+                              {w}
+                            </button>
+                            {hint && <span className="text-xs text-gray-400">{hint}</span>}
+                          </div>
+                          <textarea
+                            value={sentenceInputs[w] || ''}
+                            onChange={(e) => setSentenceInputs(prev => ({ ...prev, [w]: e.target.value }))}
+                            placeholder={`用 "${w}" 造一个完整的英文句子...`}
+                            rows={2}
+                            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400 resize-none"
+                          />
+                          {r && (
+                            <div className="mt-2 p-3 bg-gray-50 rounded-lg space-y-1.5">
+                              <div className="flex items-center gap-2">
+                                <span className={cn('text-xl font-bold', r.score >= 80 ? 'text-green-600' : r.score >= 60 ? 'text-amber-500' : 'text-red-500')}>
+                                  {r.score}
+                                </span>
+                                <span className="text-xs text-gray-400">/ 100</span>
+                                <Badge variant={r.correct_usage ? 'success' : 'danger'}>
+                                  {r.correct_usage ? '用法正确' : '用法有误'}
+                                </Badge>
+                              </div>
+                              <p className="text-sm text-gray-600">{r.feedback}</p>
+                              {r.improved && (
+                                <p className="text-xs text-indigo-600 italic">改进建议：{r.improved}</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                    <Button onClick={handleGradeBatch} disabled={sentenceLoading || selectedWords.every(w => !(sentenceInputs[w] || '').trim())}>
+                      {sentenceLoading ? <LoadingSpinner size="sm" /> : <Sparkles className="w-4 h-4" />}
+                      {sentenceLoading ? 'AI 批量评阅中...' : `批量提交评阅（${selectedWords.filter(w => (sentenceInputs[w] || '').trim()).length} 句）`}
+                    </Button>
                   </div>
+                )}
+              </div>
+            )}
+
+            {/* ===== 汇总报告 ===== */}
+            {exerciseTab === 'summary' && (
+              <div className="space-y-5">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[
+                    { label: '选词填空', score: clozeChecked ? `${clozeCorrect}/${clozeTotal}` : '未作答', done: clozeChecked },
+                    { label: '释义匹配', score: matchChecked ? `${matchCorrect}/${matchTotal}` : '未作答', done: matchChecked },
+                    {
+                      label: '造句练习',
+                      score: gradedSentences.length ? `${sentenceAvg} 分` : '未作答',
+                      done: gradedSentences.length > 0,
+                    },
+                    {
+                      label: '综合完成度',
+                      score: `${[clozeChecked, matchChecked, gradedSentences.length > 0].filter(Boolean).length}/3`,
+                      done: true,
+                    },
+                  ].map(item => (
+                    <div key={item.label} className="p-3 rounded-xl bg-gray-50 border border-gray-100">
+                      <div className="text-xs text-gray-400 mb-1">{item.label}</div>
+                      <div className={cn('text-lg font-bold', item.done ? 'text-gray-800' : 'text-gray-300')}>
+                        {item.score}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {!clozeChecked && !matchChecked && gradedSentences.length === 0 ? (
+                  <div className="py-8 text-center">
+                    <p className="text-sm text-gray-400">还没有作答记录</p>
+                    <p className="text-xs text-gray-300 mt-1">完成任意题型并「对答案」或提交评阅后，这里会汇总你的表现</p>
+                  </div>
+                ) : (
+                  <>
+                    {/* 错题清单 */}
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-800 mb-2">错题清单</h4>
+                      {clozeWrong.length === 0 && matchWrong.length === 0 && sentenceWrong.length === 0 ? (
+                        <p className="text-sm text-green-600">全部正确，表现优秀</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {clozeWrong.map((c, i) => (
+                            <div key={`cw-${i}`} className="p-2.5 bg-red-50/60 rounded-lg text-xs">
+                              <Badge variant="danger" className="mr-1.5">选词填空</Badge>
+                              <span className="text-gray-600">你选了「{c.picked}」，正确答案「{c.answer}」</span>
+                            </div>
+                          ))}
+                          {matchWrong.map((m) => (
+                            <div key={`mw-${m.word}`} className="p-2.5 bg-red-50/60 rounded-lg text-xs">
+                              <Badge variant="danger" className="mr-1.5">释义匹配</Badge>
+                              <span className="text-gray-600">
+                                {m.word} → 正确释义「{m.definition}」
+                              </span>
+                            </div>
+                          ))}
+                          {sentenceWrong.map((r: any, i) => (
+                            <div key={`sw-${i}`} className="p-2.5 bg-amber-50/60 rounded-lg text-xs">
+                              <Badge variant="warning" className="mr-1.5">造句</Badge>
+                              <span className="text-gray-600">{r.word}（{r.score} 分）：{r.feedback}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 生词清单 */}
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-800 mb-2">本次词汇清单</h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {allWords.map(m => (
+                          <div key={m.word} className="flex items-start gap-2 p-2.5 bg-gray-50 rounded-lg">
+                            <button
+                              onClick={() => handlePronounce(m.word)}
+                              className="text-sm font-medium text-gray-800 hover:text-indigo-600 shrink-0"
+                              title="朗读"
+                            >
+                              {m.word}
+                            </button>
+                            <span className="text-xs text-gray-500 leading-relaxed">{m.definition}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
                 )}
               </div>
             )}

@@ -9,7 +9,7 @@ from app.models.user import User
 from app.models.listening import ListeningMaterial, ListeningExercise
 from app.auth.security import get_current_user
 from app.schemas.listening import ListeningGenerateRequest, ListeningMaterialResponse, ListeningImportRequest
-from app.services.llm_service import generate_listening_script, extract_listening_key_points, generate_vocab_exercises, grade_sentence
+from app.services.llm_service import generate_listening_script, extract_listening_key_points, generate_vocab_exercises, grade_sentence, grade_sentences_batch
 from app.services.speech_service import text_to_speech
 
 router = APIRouter(prefix="/api/listening", tags=["听力模块"])
@@ -50,6 +50,32 @@ async def grade_vocab_sentence(req: SentenceGradeRequest, user: User = Depends(g
     if len(req.sentence) > 2000:
         raise HTTPException(400, "句子过长")
     return await grade_sentence(req.word, req.sentence)
+
+
+class BatchSentenceItem(BaseModel):
+    word: str
+    sentence: str
+
+
+class BatchSentenceGradeRequest(BaseModel):
+    items: list[BatchSentenceItem] = []
+
+
+@router.post("/vocab-grade-batch")
+async def grade_vocab_sentences_batch(
+    req: BatchSentenceGradeRequest, user: User = Depends(get_current_user)
+):
+    """批量评阅造句练习（一次提交多个目标词，返回等长结果数组）"""
+    if not req.items:
+        raise HTTPException(400, "缺少造句内容")
+    if len(req.items) > 10:
+        raise HTTPException(400, "单次最多评阅 10 句")
+    for it in req.items:
+        if len(it.sentence) > 2000:
+            raise HTTPException(400, "存在过长句子")
+    return await grade_sentences_batch(
+        [{"word": it.word, "sentence": it.sentence} for it in req.items]
+    )
 
 
 @router.post("/key-points")

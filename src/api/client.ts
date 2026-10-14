@@ -118,6 +118,22 @@ export const listeningApi = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+
+  /** 批量评阅造句（一次提交多个目标词，返回等长结果数组） */
+  vocabGradeBatch: (items: { word: string; sentence: string }[]) =>
+    request<{
+      results: {
+        word: string
+        sentence: string
+        score: number
+        correct_usage: boolean
+        feedback: string
+        improved: string
+      }[]
+    }>('/api/listening/vocab-grade-batch', {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    }),
 }
 
 // ========== 口语模块 API ==========

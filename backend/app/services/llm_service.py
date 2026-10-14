@@ -338,6 +338,8 @@ async def grade_writing_core(content: str, writing_type: str, prompt: str, title
 【作文原文】
 {content}
 
+【字数统计】全文共 {len(content.split())} 词。
+
 【评分维度】每项满分 100，必须全部输出且顺序一致：
 Task Achievement / Coherence & Cohesion / Lexical Resource / Grammatical Range & Accuracy / Content Depth / Organization
 
@@ -346,11 +348,36 @@ Task Achievement / Coherence & Cohesion / Lexical Resource / Grammatical Range &
 ② 指出具体缺什么（论据？反例？数据？因果链？）；
 ③ 给出可直接操作的改法（例如"第二段论点X缺少支撑，可补充Y方面的例子，写成…"）。
 
+【维度区分度要求 — 重要】
+六个维度的分数**必须体现真实差异**，不得全部落在 70-80 的窄区间：
+- 每个维度的得分应基于该维度的实际表现独立判定，表现好的给高分（85 以上），
+  表现有明显短板的给低分（70 以下），整体分差应能反映学生的能力长短；
+- 至少应有一个维度明显高于或低于其他维度（除非全文各维度确实完全均衡，此时须在
+  ai_feedback 中说明"各维度表现均衡"）；
+- 严禁为省事而让所有维度都给相近的中间分数。
+
+【字数与篇幅评价 — 必填字段】
+- word_count 填全文实际词数（上文字数统计）；
+- word_count_feedback 填针对篇幅的评价：对照该题型的合理篇幅给出判断
+  （议论文/评论类文章建议 250-350 词；叙事类可 200-400 词；学术类 300-500 词），
+  明确说明本篇是"偏短/适中/偏长"，并给出具体建议（如"建议扩充至 300 词左右，
+  可在第二段补充一个具体事例"）。
+
+【逐句纠错硬性要求 — 重要】
+- error_details 中每一条的 original 与 corrected **必须实质不同**。
+  若某句没有需要修改的错误，**不要列入** error_details；
+- 严禁出现 original 与 corrected 完全相同、或仅标点/空格差异的"假纠错"；
+- 长难句结构判断必须准确，特别注意：
+  · 从句中的非谓语动词（分词、不定式）**不是谓语**，不得改写成谓语动词；
+  · 定语从句、状语从句、同位语从句的边界要判断正确，不得把从句谓语误判为主句谓语；
+  · 若不确定某长句是否有语法错误，宁可不列入 error_details，也不得给出错误纠正；
+- error_type 使用：grammar / vocabulary / collocation / punctuation / structure。
+
 【输出 JSON】
-{{"scores":[{{"name":"Task Achievement","score":85,"maxScore":100,"feedback":"..."}}],"overall_score":82,"ai_feedback":"总体评价文本","error_details":[{{"original":"原句","corrected":"修改后","error_type":"grammar","explanation":"错误说明"}}]}}"""
+{{"scores":[{{"name":"Task Achievement","score":85,"maxScore":100,"feedback":"..."}}],"overall_score":82,"word_count":{len(content.split())},"word_count_feedback":"篇幅评价...","ai_feedback":"总体评价文本","error_details":[{{"original":"原句","corrected":"修改后（必须与原文实质不同）","error_type":"grammar","explanation":"错误说明"}}]}}"""
 
     result, _hit = await cached_json(
-        "grade_writing",
+        "grade_writing_v3",
         [writing_type, prompt, title, content],
         lambda: safe_json_call(
             [
@@ -398,10 +425,17 @@ async def generate_writing_enhancement(
 
 【拓展词汇要求】
 - 8-12 个该主题下地道写作者会使用、但原文未使用的高级词汇/短语
-- 每项含词汇、中文释义、地道用法示例句
+- 每项必须包含以下**全部字段**，缺一不可：
+  · term：词汇或短语
+  · pos：词性（如 n. / v. / adj. / adv. / phrase）
+  · ipa：英式或美式音标（用国际音标，写在斜杠内，如 /ˈkɒntemplətɪv/；短语可填其核心词音标）
+  · definition：中文释义
+  · collocations：2-3 个常见搭配（用 · 分隔，如 "a contemplative mood · in a contemplative way"）
+  · example：地道用法示例句
+- 只标中文释义是不够的：学生需要能读、能搭配、能用出来。
 
 【输出 JSON】
-{{"revised_version":"润色后的完整作文","topic_vocabulary":[{{"term":"词汇或短语","definition":"中文释义","example":"地道用法示例句"}}]}}"""
+{{"revised_version":"润色后的完整作文","topic_vocabulary":[{{"term":"词汇或短语","pos":"adj.","ipa":"/ˈkɒntemplətɪv/","definition":"中文释义","collocations":"搭配1 · 搭配2","example":"地道用法示例句"}}]}}"""
 
     est_out = int(word_count * 1.7) + 700
     result, _hit = await cached_json(
@@ -428,17 +462,66 @@ async def grade_writing(content: str, writing_type: str, prompt: str, title: str
     """
     if not settings.WRITING_LAZY_ENHANCE:
         result, _hit = await cached_json(
-            "grade_writing",
+            "grade_writing_full_v3",
             [writing_type, prompt, title, content],
             lambda: _grade_writing_full(content, writing_type, prompt, title),
         )
-        return result
+        return _sanitize_writing_result(result, content)
 
     core = await grade_writing_core(content, writing_type, prompt, title)
     core.setdefault("revised_version", "")
     core.setdefault("topic_vocabulary", [])
     core["enhance_pending"] = not (core.get("revised_version") or core.get("topic_vocabulary"))
-    return core
+    return _sanitize_writing_result(core, content)
+
+
+def _norm_text(s: str) -> str:
+    """归一化文本用于比较：去空白、去标点、小写"""
+    import re as _re
+    return _re.sub(r"[\s\W_]+", "", (s or "").lower())
+
+
+def _sanitize_writing_result(result: dict, content: str) -> dict:
+    """服务端确定性清洗写作批改结果
+
+    1. 过滤"假纠错"：original 与 corrected 归一化后相同（或仅标点/空格差异）的条目直接剔除；
+    2. 过滤 original 不在原文中的条目（LLM 凭空编造的句子）；
+    3. 补齐 word_count：LLM 未返回或返回异常时以真实统计为准。
+    这一步是确定性保障，不依赖 LLM 是否遵守 prompt。
+    """
+    if not isinstance(result, dict):
+        return result
+
+    body_norm = _norm_text(content)
+
+    raw_errors = result.get("error_details") or []
+    cleaned = []
+    for e in raw_errors:
+        if not isinstance(e, dict):
+            continue
+        orig = (e.get("original") or "").strip()
+        corr = (e.get("corrected") or "").strip()
+        if not orig or not corr:
+            continue
+        # 归一化后完全相同 → 假纠错，剔除
+        if _norm_text(orig) == _norm_text(corr):
+            continue
+        # original 不在原文中 → 凭空编造，剔除
+        if body_norm and _norm_text(orig) not in body_norm:
+            continue
+        cleaned.append(e)
+    result["error_details"] = cleaned
+
+    # word_count 以真实统计为准
+    real_wc = len((content or "").split())
+    try:
+        declared = int(result.get("word_count") or 0)
+    except (TypeError, ValueError):
+        declared = 0
+    if declared != real_wc:
+        result["word_count"] = real_wc
+    result.setdefault("word_count_feedback", "")
+    return result
 
 
 # ========== 口语评分 ==========
@@ -742,6 +825,22 @@ async def grade_translation(source_text: str, user_translation: str, direction: 
 3. Vocabulary (词汇) — 用词是否恰当
 4. Grammar (语法) — 译文语法是否正确
 
+【评分尺度 — 必须严格遵守】
+- 这是一个开放的 0-100 分制，**满分是可达的**。若译文在准确性、流畅度、词汇、语法上均无问题，
+  且与参考译文水平相当或更好，必须给出 95-100 分，不得为"留有余地"而扣分。
+- 评分必须与反馈一致：若某维度 feedback 中未指出任何问题，该维度分数**不得低于 95**。
+  反之，若指出明确错误，须相应扣分。
+- 不要在无实质问题时以"还可以更地道""仍有提升空间"等模糊理由扣分。
+
+【反馈自洽硬性要求】
+- improvement_suggestions 与各维度 feedback **不得互相矛盾**：
+  不得在某一处说"表达自然流畅"又在另一处将其列为问题。
+- 若同一处存在**两种都可接受的译法**，必须明确说明"两种译法皆可"，并说明各自适用语境，
+  **不得将其判定为错误**。示例：「universal」译作"普惠性"属意译、"全民的"属规范译法，两者皆可，
+  应写成"两者皆可，'全民的'为规范性译法；'普惠性'在强调受益面时更贴切"，
+  而不能表述为"应改为'全民的'"。
+- 客观错误（语法错误、词义错误、漏译）才列为问题；风格偏好只作建议，与错误区分开。
+
 请严格按 JSON 格式输出：
 {{
   "scores": [
@@ -752,12 +851,15 @@ async def grade_translation(source_text: str, user_translation: str, direction: 
   ],
   "overall_score": 81,
   "reference_translation": "参考译文...",
-  "improvement_suggestions": "改进建议...",
+  "improvement_suggestions": "改进建议（须与上方各维度反馈一致，不得自相矛盾）...",
+  "optimal": false,
   "translation_tips": ["翻译技巧1", "翻译技巧2"]
-}}"""
+}}
+
+其中 "optimal" 表示本次译文是否已达到无需改进的水准（true 时 overall_score 应为 95-100）。"""
 
     result, _hit = await cached_json(
-        "grade_translation",
+        "grade_translation_v2",
         [direction, source_text, user_translation],
         lambda: safe_json_call(
             [
@@ -1401,6 +1503,10 @@ async def generate_vocab_exercises(script: str, count: int = 6) -> dict:
         return _mock_vocab_exercises(script, count)
 
     system_msg = "你是一位英语词汇教学专家，擅长基于语料设计词汇练习。"
+
+    # 题型数量：造句练习需支持批量，故按 count 给足候选词
+    n_sentence = max(6, count)
+
     user_msg = f"""以下是一段英语文本。请基于文中出现的词汇设计三种词汇练习。
 
 文本:
@@ -1410,10 +1516,20 @@ async def generate_vocab_exercises(script: str, count: int = 6) -> dict:
 
 【要求】
 1. 先选出 {count} 个对学习者最有价值的词汇（优先选文本中的关键动词/名词/形容词）
+
 2. cloze（选词填空）：{count} 题，每题从文本中取一句话挖掉目标词（用 ____ 表示空格），
-   options 给 4 个选项（含正确答案），answer 为正确答案
-3. matching（释义匹配）：{count} 对 word-definition 配对，definition 用中文
-4. sentence_words（造句练习）：从已选词汇中挑 4 个适合造句的词，每个附 hint（中文提示）
+   options 给 4 个选项（含正确答案），answer 为正确答案。
+   ⚠️ 干扰项硬性要求（避免学生靠"眼熟"或词形直接排除）：
+   - 干扰项必须与本句语境**语义相关、词性一致、难度相当**（同属本主题的同类词）；
+   - 严禁使用与句子含义明显不搭、词性不同（如用名词干扰动词空）、
+     或由同一词根变形而来的词（如 target 干扰 targeting）；
+   - 四个选项中只能有一个在语义与语法上完全成立，其余三个须"看似合理但读不通"。
+
+3. matching（释义匹配）：{count} 对 word-definition 配对，definition 用中文，
+   释义要能区分开（避免多个词共用同一泛化释义）。
+
+4. sentence_words（造句练习）：提供 {n_sentence} 个适合造句的词（覆盖上述全部目标词），
+   每个附 hint（中文提示，说明该词的典型搭配或使用场景）。
 
 请严格按 JSON 格式输出：
 {{
@@ -1429,7 +1545,7 @@ async def generate_vocab_exercises(script: str, count: int = 6) -> dict:
 }}"""
 
     result, _hit = await cached_json(
-        "generate_vocab_exercises",
+        "generate_vocab_exercises_v2",
         [script, count],
         lambda: safe_json_call(
             [
@@ -1531,14 +1647,22 @@ def _mock_writing_topics(writing_type: str, theme: str, difficulty: str, count: 
 def _mock_vocab_exercises(script: str, count: int) -> dict:
     sents = [s.strip() for s in script.split(".") if s.strip()][:count]
     words = [s.split()[0] if s.split() else "word" for s in sents]
+    # 与目标词同为主题语境的干扰项（词性一致），避免跨语义随机干扰
+    distractors = ["maintain", "pursue", "assess", "allocate", "enhance", "restrict"]
     return {
         "cloze": [
-            {"sentence": s.replace(w, "____", 1) if w in s else f"The team ____ the project ({w}).",
-             "options": [w, "abandon", "delay", "ignore"], "answer": w}
+            {
+                "sentence": s.replace(w, "____", 1) if w in s else f"The team ____ the project ({w}).",
+                "options": [w] + [d for d in distractors if d.lower() != w.lower()][:3],
+                "answer": w,
+            }
             for s, w in zip(sents, words)
         ],
         "matching": [{"word": w, "definition": "（mock 释义）待配置 LLM key 后自动生成"} for w in words],
-        "sentence_words": [{"word": w, "hint": "用这个词造一个与原文语境相关的句子"} for w in words[:4]],
+        "sentence_words": [
+            {"word": w, "hint": "用这个词造一个与原文语境相关的句子"}
+            for w in words[: max(6, count)]
+        ],
     }
 
 
@@ -1552,17 +1676,99 @@ def _mock_sentence_grade(word: str, sentence: str) -> dict:
     }
 
 
+async def grade_sentences_batch(items: list[dict]) -> dict:
+    """批量评阅造句练习
+
+    items: [{"word": "...", "sentence": "..."}]
+    返回: {"results": [{"word":..., "sentence":..., "score":..., "correct_usage":..., "feedback":..., "improved":...}]}
+    """
+    items = [it for it in (items or []) if (it.get("word") or "").strip() and (it.get("sentence") or "").strip()]
+    if not items:
+        return {"results": []}
+
+    if not settings.LLM_API_KEY:
+        return {
+            "results": [
+                {**it, **_mock_sentence_grade(it["word"], it["sentence"])} for it in items
+            ]
+        }
+
+    system_msg = "你是一位英语词汇教学专家，正在批量批改学生的造句练习。"
+    listing = "\n".join(
+        f"{i + 1}. 目标词: {it['word']} | 学生造句: {it['sentence']}"
+        for i, it in enumerate(items)
+    )
+    user_msg = f"""学生需要用指定词汇逐一造句，请批改下列 {len(items)} 句。
+
+{listing}
+
+请针对每一句评阅：
+1. 词汇使用是否正确（词义、搭配、词形）
+2. 语法是否正确
+3. 句子是否自然地道
+
+请严格按 JSON 格式输出，results 数组顺序必须与上面编号顺序完全一致、数量相等：
+{{
+  "results": [
+    {{
+      "word": "对应的目标词",
+      "sentence": "学生原句",
+      "score": 0-100 的整数,
+      "correct_usage": true/false,
+      "feedback": "中文点评（两三句话）",
+      "improved": "改进后的表达；无问题则给更地道的表达"
+    }}
+  ]
+}}"""
+
+    def _mock():
+        return {"results": [{**it, **_mock_sentence_grade(it["word"], it["sentence"])} for it in items]}
+
+    result, _hit = await cached_json(
+        "grade_sentences_batch",
+        [json.dumps(items, ensure_ascii=False, sort_keys=True)],
+        lambda: safe_json_call(
+            [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            _mock,
+            max_tokens=min(3000, 260 * len(items) + 400),
+        ),
+    )
+
+    results = result.get("results") if isinstance(result, dict) else None
+    if not isinstance(results, list) or len(results) != len(items):
+        # LLM 返回数量不符时逐条回退为单句 mock，保证前端始终拿到等长结果
+        return _mock()
+    # 补齐 word/sentence（LLM 可能漏回）
+    for it, r in zip(items, results):
+        r.setdefault("word", it["word"])
+        r.setdefault("sentence", it["sentence"])
+    return {"results": results}
+
+
 def _mock_writing_grade(content: str) -> dict:
+    wc = len(content.split())
     return {
         "scores": [
-            {"name": "Task Achievement", "score": 78, "maxScore": 100, "feedback": "文章基本回应了题目要求，但论点展开不够深入。"},
-            {"name": "Coherence & Cohesion", "score": 75, "maxScore": 100, "feedback": "段落间有过渡，但衔接手段较为单一。"},
-            {"name": "Lexical Resource", "score": 72, "maxScore": 100, "feedback": "词汇量适中，但缺乏高级词汇的使用。"},
-            {"name": "Grammatical Range & Accuracy", "score": 80, "maxScore": 100, "feedback": "语法基本正确，句式有一定多样性。"},
-            {"name": "Content Depth", "score": 70, "maxScore": 100, "feedback": "论据支持不够充分，建议增加具体例子。"},
-            {"name": "Organization", "score": 76, "maxScore": 100, "feedback": "结构清晰，但结论部分可以更有力。"},
+            {"name": "Task Achievement", "score": 82, "maxScore": 100, "feedback": "文章基本回应了题目要求，但论点展开不够深入。"},
+            {"name": "Coherence & Cohesion", "score": 76, "maxScore": 100, "feedback": "段落间有过渡，但衔接手段较为单一。"},
+            {"name": "Lexical Resource", "score": 68, "maxScore": 100, "feedback": "词汇偏基础，缺乏高级词汇的使用，同一表达重复出现。"},
+            {"name": "Grammatical Range & Accuracy", "score": 88, "maxScore": 100, "feedback": "语法准确，句式有一定多样性，长句结构使用得当。"},
+            {"name": "Content Depth", "score": 65, "maxScore": 100, "feedback": "论据支持不够充分，建议增加具体例子。"},
+            {"name": "Organization", "score": 80, "maxScore": 100, "feedback": "结构清晰，但结论部分可以更有力。"},
         ],
-        "overall_score": 75,
+        "overall_score": 77,
+        "word_count": wc,
+        "word_count_feedback": (
+            f"本文共 {wc} 词，"
+            + ("篇幅偏短，建议扩充至 300 词左右，可在主体段补充具体事例与因果分析。"
+               if wc < 250 else
+               "篇幅偏长，建议精简重复论述，将次要论点压缩或合并。"
+               if wc > 400 else
+               "篇幅适中，符合本类文章 250-350 词的篇幅要求。")
+        ),
         "ai_feedback": "本文整体结构清晰，语法基本正确。主要问题在于论点展开不够深入，缺乏具体例证。建议在论述中加入更多数据或实例来增强说服力。词汇方面可以尝试使用更高级的表达。",
         "revised_version": content + "\n\n[AI润色版将在配置LLM API Key后提供完整润色]",
         "error_details": [
@@ -1577,9 +1783,12 @@ def _mock_enhance(content: str) -> dict:
     return {
         "revised_version": base.get("revised_version", content),
         "topic_vocabulary": [
-            {"term": "facilitate", "definition": "促进，使便利", "example": "Digital tools facilitate communication across borders."},
-            {"term": "compelling", "definition": "令人信服的", "example": "The author presents a compelling argument for reform."},
-            {"term": "in light of", "definition": "鉴于，根据", "example": "In light of recent findings, the policy needs revision."},
+            {"term": "facilitate", "pos": "v.", "ipa": "/fəˈsɪlɪteɪt/", "definition": "促进，使便利",
+             "collocations": "facilitate communication · facilitate the process", "example": "Digital tools facilitate communication across borders."},
+            {"term": "compelling", "pos": "adj.", "ipa": "/kəmˈpelɪŋ/", "definition": "令人信服的",
+             "collocations": "a compelling argument · compelling evidence", "example": "The author presents a compelling argument for reform."},
+            {"term": "in light of", "pos": "phrase", "ipa": "/ɪn laɪt əv/", "definition": "鉴于，根据",
+             "collocations": "in light of recent findings · in light of this", "example": "In light of recent findings, the policy needs revision."},
         ],
     }
 

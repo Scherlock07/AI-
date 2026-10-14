@@ -55,6 +55,9 @@ class WritingGradeResult(BaseModel):
     revised_version: str = ""
     error_details: list[dict] = []
     topic_vocabulary: list[dict] = []
+    # 字数统计与篇幅评价
+    word_count: int = 0
+    word_count_feedback: str = ""
     # 润色范文与拓展词汇是否还需按需生成
     enhance_pending: bool = False
 

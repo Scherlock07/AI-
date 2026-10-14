@@ -9,10 +9,11 @@ import { dailyIndex, todayLabel } from '@/lib/daily'
 import { writingApi } from '@/api/client'
 import { useToast } from '@/contexts/ToastContext'
 import { trackFeatureUse } from '@/lib/tracker'
+import { speak } from '@/lib/tts'
 import {
   PenLine, Upload, Camera, FileText, Sparkles, TrendingUp,
   CheckCircle2, Lightbulb, ArrowRight, Star, BookOpen,
-  BarChart3, MessageSquare, Palette, BookMarked, ArrowLeft, Clock, Maximize2, X,
+  BarChart3, MessageSquare, Palette, BookMarked, ArrowLeft, Clock, Maximize2, X, Volume2,
 } from 'lucide-react'
 
 type TabType = 'grading' | 'daily' | 'history'
@@ -150,6 +151,7 @@ function GradingView() {
 
   // ===== 批改结果：全宽居中展示，避免挤压在侧栏 =====
   if (result) {
+    const wordCount = content.trim().split(/\s+/).filter(Boolean).length
     return (
       <div className="max-w-3xl mx-auto space-y-4">
         <div className="flex items-center justify-between">
@@ -177,7 +179,7 @@ function GradingView() {
               </div>
               <div className="text-right">
                 <div className="text-sm text-gray-500 mb-1">词数</div>
-                <div className="text-2xl font-bold text-gray-700">{content.trim().split(/\s+/).filter(Boolean).length}</div>
+                <div className="text-2xl font-bold text-gray-700">{result.word_count || wordCount}</div>
               </div>
             </div>
             <Progress value={result.overall_score} color="primary" />
@@ -187,7 +189,16 @@ function GradingView() {
         {result.scores && (
           <Card>
             <CardHeader>
-              <CardTitle>多维度评分</CardTitle>
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <CardTitle>多维度评分</CardTitle>
+                {(() => {
+                  const vals = result.scores.map((d: any) => d.score || 0)
+                  const spread = vals.length ? Math.max(...vals) - Math.min(...vals) : 0
+                  return spread >= 12
+                    ? <span className="text-xs text-gray-400">各维度落差 {spread} 分，强弱项分明</span>
+                    : <span className="text-xs text-amber-500">各维度较为均衡（落差仅 {spread} 分）</span>
+                })()}
+              </div>
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
@@ -195,13 +206,70 @@ function GradingView() {
                   <div key={dim.name}>
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-sm font-medium text-gray-700">{dim.name}</span>
-                      <span className={cn('text-sm font-bold', getScoreColor(dim.score))}>{dim.score}</span>
+                      <div className="flex items-center gap-2">
+                        <span className={cn('text-sm font-bold', getScoreColor(dim.score))}>{dim.score}</span>
+                        <Badge variant={dim.score >= 85 ? 'success' : dim.score >= 70 ? 'primary' : 'danger'}>
+                          {dim.score >= 85 ? '优势' : dim.score >= 70 ? '中等' : '薄弱'}
+                        </Badge>
+                      </div>
                     </div>
                     <Progress value={dim.score} color={dim.score >= 85 ? 'success' : dim.score >= 70 ? 'primary' : 'warning'} />
                     {dim.feedback && <p className="text-xs text-gray-500 mt-1 leading-relaxed">{dim.feedback}</p>}
                   </div>
                 ))}
               </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* 字数与篇幅评价 */}
+        {(result.word_count || result.word_count_feedback) && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-indigo-500" />
+                <CardTitle>篇幅评价</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-4 mb-3">
+                <div className="text-center">
+                  <div className="text-3xl font-bold text-indigo-600">{result.word_count || wordCount}</div>
+                  <div className="text-xs text-gray-400 mt-0.5">词</div>
+                </div>
+                <div className="flex-1">
+                  {(() => {
+                    const wc = result.word_count || wordCount
+                    // 议论文/评论类建议 250-350 词
+                    const lo = 250, hi = 350
+                    const pct = Math.min(100, (wc / hi) * 100)
+                    return (
+                      <>
+                        <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
+                          <span>建议篇幅 250-350 词</span>
+                          <span className={cn(
+                            'font-medium',
+                            wc < lo ? 'text-amber-500' : wc > hi ? 'text-amber-500' : 'text-green-600',
+                          )}>
+                            {wc < lo ? '偏短' : wc > hi ? '偏长' : '适中'}
+                          </span>
+                        </div>
+                        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                          <div
+                            className={cn('h-full rounded-full', wc < lo ? 'bg-amber-400' : wc > hi ? 'bg-amber-400' : 'bg-green-500')}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </>
+                    )
+                  })()}
+                </div>
+              </div>
+              {result.word_count_feedback && (
+                <p className="text-sm text-gray-600 leading-relaxed p-3 bg-indigo-50/50 rounded-lg">
+                  {result.word_count_feedback}
+                </p>
+              )}
             </CardContent>
           </Card>
         )}
@@ -220,33 +288,66 @@ function GradingView() {
           </Card>
         )}
 
-        {result.error_details && result.error_details.length > 0 && (
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Lightbulb className="w-5 h-5 text-amber-500" />
-                <CardTitle>逐句纠错</CardTitle>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {result.error_details.map((imp: any, i: number) => (
-                  <div key={i} className="p-3 bg-gray-50 rounded-lg">
-                    <div className="flex items-center gap-2 mb-1 flex-wrap">
-                      <span className="text-sm text-red-500 line-through">{imp.original}</span>
-                      <ArrowRight className="w-3 h-3 text-gray-400" />
-                      <span className="text-sm text-emerald-600 font-medium">{imp.corrected}</span>
-                    </div>
-                    <p className="text-xs text-gray-500">
-                      <Badge variant="default" className="mr-1">{imp.error_type}</Badge>
-                      {imp.explanation}
-                    </p>
+        {result.error_details && (() => {
+          // 前端二次过滤：剔除"改前改后无实质差异"的假纠错（后端已过滤一层，此处兜底）
+          const norm = (s: string) => (s || '').toLowerCase().replace(/[\s\W_]+/g, '')
+          const errors = result.error_details.filter((e: any) => {
+            const a = norm(e.original), b = norm(e.corrected)
+            return a && b && a !== b
+          })
+          if (errors.length === 0) {
+            return (
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                    <CardTitle>逐句纠错</CardTitle>
                   </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-emerald-600">
+                    未检测到需要修改的语法或词汇错误，全文语句表达正确。
+                  </p>
+                </CardContent>
+              </Card>
+            )
+          }
+          return (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <Lightbulb className="w-5 h-5 text-amber-500" />
+                    <CardTitle>逐句纠错</CardTitle>
+                  </div>
+                  <span className="text-xs text-gray-400">共 {errors.length} 处</span>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {errors.map((imp: any, i: number) => (
+                    <div key={i} className="p-3 bg-gray-50 rounded-lg">
+                      <div className="space-y-1.5 mb-1.5">
+                        <div className="flex items-start gap-2">
+                          <span className="text-xs text-red-500 shrink-0 mt-0.5">原句</span>
+                          <span className="text-sm text-red-500 line-through break-all">{imp.original}</span>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="text-xs text-emerald-600 shrink-0 mt-0.5">改后</span>
+                          <span className="text-sm text-emerald-600 font-medium break-all">{imp.corrected}</span>
+                        </div>
+                      </div>
+                      <p className="text-xs text-gray-500">
+                        <Badge variant="default" className="mr-1">{imp.error_type}</Badge>
+                        {imp.explanation}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )
+        })()}
 
         {result.enhance_pending &&
           !result.revised_version &&
@@ -532,11 +633,32 @@ function TopicVocabularyPanel({ vocabulary }: { vocabulary: any[] }) {
         <div className="space-y-2">
           {vocabulary.map((v: any, i: number) => (
             <div key={i} className="p-3 bg-emerald-50/60 rounded-lg">
-              <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap mb-1">
                 <span className="text-sm font-semibold text-emerald-700">{v.term}</span>
-                {v.definition && <span className="text-xs text-gray-500">{v.definition}</span>}
+                {v.pos && (
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-medium">
+                    {v.pos}
+                  </span>
+                )}
+                {v.ipa && (
+                  <button
+                    onClick={() => speak({ text: v.term, lang: 'en-US', rate: 0.9 })}
+                    className="text-xs text-gray-500 hover:text-emerald-700 inline-flex items-center gap-0.5"
+                    title="朗读"
+                  >
+                    <Volume2 className="w-3 h-3" />
+                    <span className="font-mono">{v.ipa}</span>
+                  </button>
+                )}
+                {v.definition && <span className="text-xs text-gray-600">{v.definition}</span>}
               </div>
-              {v.example && <p className="text-xs text-gray-400 mt-1 italic">e.g. {v.example}</p>}
+              {v.collocations && (
+                <p className="text-xs text-gray-500 mb-0.5">
+                  <span className="text-gray-400">常见搭配：</span>
+                  {v.collocations}
+                </p>
+              )}
+              {v.example && <p className="text-xs text-gray-400 italic">e.g. {v.example}</p>}
             </div>
           ))}
         </div>
@@ -892,7 +1014,7 @@ function DailyPracticeView() {
               </div>
               <div className="text-right">
                 <div className="text-sm text-gray-500 mb-1">词数</div>
-                <div className="text-2xl font-bold text-gray-700">{content.trim().split(/\s+/).filter(Boolean).length}</div>
+                <div className="text-2xl font-bold text-gray-700">{result.word_count || content.trim().split(/\s+/).filter(Boolean).length}</div>
               </div>
             </div>
             <Progress value={result.overall_score} color="primary" />
