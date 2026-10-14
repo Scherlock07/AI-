@@ -80,10 +80,11 @@ def collect_student_profile(student: User, db: Session, days: int = 30) -> dict:
     overall_avg = _avg([v["avg_score"] for v in scored_modules])
 
     # 2) 写作明细：维度均分 + 高频错误类型
+    # 注意：WritingSubmission 的时间字段是 submitted_at（非 created_at）
     writings = db.query(WritingSubmission).filter(
         WritingSubmission.user_id == student.id,
-        WritingSubmission.created_at >= since_dt,
-    ).order_by(WritingSubmission.created_at.desc()).all()
+        WritingSubmission.submitted_at >= since_dt,
+    ).order_by(WritingSubmission.submitted_at.desc()).all()
 
     writing_dimensions = {}
     error_type_count = {}
