@@ -146,6 +146,11 @@ async def evaluate(req: SpeakingEvaluateRequest, db: Session = Depends(get_db), 
 
     # LLM 评估
     llm_result = await evaluate_speaking(transcript, req.topic, req.type, req.reference_text)
+    # 防御：LLM 层已做结构规整，这里再兜一层，确保任何情况下都不会因形状异常而 500
+    if not isinstance(llm_result, dict):
+        llm_result = {}
+    if not isinstance(llm_result.get("scores"), list):
+        llm_result["scores"] = []
 
     # 保存记录
     # duration 此前一直未写入（口语记录时长恒为 0）——兰天童 10.10 反馈的时长统计据此一并修正

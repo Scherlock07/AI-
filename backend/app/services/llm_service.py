@@ -202,9 +202,9 @@ async def safe_json_call(
     temperature: float = 0.3,
     max_tokens: int = 4096,
 ):
-    """调用 LLM 并解析 JSON；预算用尽时自动降级为示例结果
+    """调用 LLM 并解析 JSON；预算用尽或输出无法解析时降级为结构完整的示例结果
 
-    保证在额度耗尽的情况下功能依然可用（返回结构完整的示例数据），
+    保证在额度耗尽、或模型输出格式异常的情况下功能依然可用，
     而不是整站报错。
     """
     try:
@@ -212,37 +212,83 @@ async def safe_json_call(
     except LLMBudgetExceeded as e:
         print(f"[LLM] budget exceeded, degrade to mock: {e}")
         return mock_factory()
+    except (ValueError, json.JSONDecodeError) as e:
+        # 模型偶尔会返回只有开围栏、没有闭围栏的内容（被 max_tokens 截断时尤其常见），
+        # 旧实现会在此抛 ValueError 直接变成 500，学生看到的是"评分失败"。
+        # 这类问题属于输出格式波动，不应让整个接口挂掉 —— 降级为示例结果并留痕。
+        print(f"[LLM] 输出无法解析为 JSON，降级为示例结果: {e}")
+        return mock_factory()
 
 
 async def call_llm_json(messages: list[dict], temperature: float = 0.3, max_tokens: int = 4096) -> dict | list:
-    """调用 LLM 并解析为 JSON"""
+    """调用 LLM 并解析为 JSON（对围栏代码块 / 前后夹带说明文字均容错）"""
     raw = await call_llm(messages, temperature=temperature, max_tokens=max_tokens)
-    # 尝试提取 JSON
+    return _parse_llm_json(raw)
+
+
+# 完整围栏块：```json ... ``` / ``` ... ```
+_FENCE_BLOCK_RE = None
+
+
+def _brace_candidates(text: str) -> list[str]:
+    """从文本中切出"第一个左括号 → 最后一个右括号"的候选片段"""
+    out: list[str] = []
+    a, b = text.find("{"), text.rfind("}")
+    if a != -1 and b > a:
+        out.append(text[a:b + 1])
+    a, b = text.find("["), text.rfind("]")
+    if a != -1 and b > a:
+        out.append(text[a:b + 1])
+    return out
+
+
+def _parse_llm_json(raw: str) -> dict | list:
+    """把模型返回的文本解析成 JSON。
+
+    ⚠️ 旧实现在 `raw.index("```", start)` 处会抛 ValueError —— 只要围栏数量是奇数
+    （例如只有开围栏、被 max_tokens 截断），整个接口就 500。
+    现在按「完整围栏块 → 残缺围栏 → 最大括号区间」三级容错，任意一级成功即返回。
+    """
+    global _FENCE_BLOCK_RE
+    text = (raw or "").strip()
+    if not text:
+        raise ValueError("LLM 返回内容为空")
+
+    # 1) 本身就是合法 JSON
     try:
-        # 尝试直接解析
-        return json.loads(raw)
+        return json.loads(text)
     except json.JSONDecodeError:
-        # 尝试从 markdown 代码块中提取
-        if "```json" in raw:
-            start = raw.index("```json") + 7
-            end = raw.index("```", start)
-            return json.loads(raw[start:end])
-        elif "```" in raw:
-            start = raw.index("```") + 3
-            end = raw.index("```", start)
-            return json.loads(raw[start:end])
-        else:
-            # 找第一个 { 或 [ 到最后一个 } 或 ]
-            first_brace = raw.find("{")
-            first_bracket = raw.find("[")
-            if first_brace == -1 and first_bracket == -1:
-                raise ValueError(f"LLM 返回内容无法解析为 JSON: {raw[:200]}")
-            start = min(x for x in [first_brace, first_bracket] if x != -1)
-            if raw[start] == "{":
-                end = raw.rfind("}")
-            else:
-                end = raw.rfind("]")
-            return json.loads(raw[start:end+1])
+        pass
+
+    # 2) 完整的围栏代码块（可能有多个，逐个尝试）
+    if _FENCE_BLOCK_RE is None:
+        import re as _re
+        _FENCE_BLOCK_RE = _re.compile(r"```[a-zA-Z0-9_-]*\s*\n?(.*?)```", _re.S)
+    for m in _FENCE_BLOCK_RE.finditer(text):
+        try:
+            return json.loads(m.group(1).strip())
+        except json.JSONDecodeError:
+            continue
+
+    # 3) 只有开围栏没有闭围栏（截断），先剥掉围栏与语言标注再取括号区间
+    if "```" in text:
+        body = text.split("```", 1)[1]
+        import re as _re2
+        body = _re2.sub(r"^[a-zA-Z0-9_-]*\s*\n", "", body, count=1)
+        for cand in _brace_candidates(body):
+            try:
+                return json.loads(cand)
+            except json.JSONDecodeError:
+                continue
+
+    # 4) 兜底：在原始文本里找最大的括号区间
+    for cand in _brace_candidates(text):
+        try:
+            return json.loads(cand)
+        except json.JSONDecodeError:
+            continue
+
+    raise ValueError(f"LLM 返回内容无法解析为 JSON: {text[:200]}")
 
 
 # ========== 写作批改 ==========
@@ -587,19 +633,91 @@ async def evaluate_speaking(transcript: str, topic: str, speaking_type: str, ref
   "reference_answer": "参考示范回答..."
 }}"""
 
-    result, _hit = await cached_json(
-        "evaluate_speaking",
-        [speaking_type, topic, reference_text, transcript],
-        lambda: safe_json_call(
+    async def _factory():
+        raw = await safe_json_call(
             [
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},
             ],
             lambda: _mock_speaking_eval(topic),
             max_tokens=1800,
-        ),
+        )
+        return _normalize_speaking_eval(raw, topic)
+
+    result, _hit = await cached_json(
+        "evaluate_speaking",
+        [speaking_type, topic, reference_text, transcript],
+        _factory,
+        validate=_is_normalized_speaking_eval,
     )
-    return result
+    # 再兜一层：即便命中的是历史脏缓存，也规整成接口约定的结构
+    return _normalize_speaking_eval(result, topic)
+
+
+def _normalize_speaking_eval(result: Any, topic: str) -> dict:
+    """把模型输出规整为接口约定的结构。
+
+    ⚠️ 模型并不总是严格照 prompt 的骨架输出：实测出现过**直接返回 scores 数组**
+    （而不是 {scores: [...], overall_score, feedback}）以及 scores 写成字典的情况。
+    旧实现拿到数组后进入路由层的 `llm_result.get(...)`，直接
+    `AttributeError: 'list' object has no attribute 'get'` → 接口 500。
+    评分属于高频入口，不能因为模型输出形状波动就整条挂掉，因此在这里统一收敛。
+    """
+    if isinstance(result, list):
+        result = {"scores": result}
+    if not isinstance(result, dict):
+        return _mock_speaking_eval(topic)
+
+    scores = result.get("scores")
+    if isinstance(scores, dict):
+        scores = [{"name": k, "score": v} for k, v in scores.items()]
+    if not isinstance(scores, list):
+        scores = []
+
+    clean: list[dict] = []
+    for item in scores:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name") or item.get("dimension") or item.get("维度") or ""
+        if not name:
+            continue
+        try:
+            score = int(round(float(item.get("score", 0))))
+        except (TypeError, ValueError):
+            score = 0
+        clean.append({
+            "name": str(name),
+            "score": max(0, min(100, score)),
+            "maxScore": 100,
+            "feedback": str(item.get("feedback") or item.get("comment") or ""),
+        })
+
+    if not clean:
+        return _mock_speaking_eval(topic)
+
+    try:
+        overall = int(round(float(result.get("overall_score", 0))))
+    except (TypeError, ValueError):
+        overall = 0
+    if overall <= 0:
+        overall = int(round(sum(s["score"] for s in clean) / len(clean)))
+
+    return {
+        "scores": clean,
+        "overall_score": max(0, min(100, overall)),
+        "feedback": str(result.get("feedback") or ""),
+        "reference_answer": str(result.get("reference_answer") or ""),
+        "transcript_warning": str(result.get("transcript_warning") or ""),
+    }
+
+
+def _is_normalized_speaking_eval(value: Any) -> bool:
+    """缓存结构校验：必须是含非空 scores 数组的对象"""
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("scores"), list)
+        and len(value["scores"]) > 0
+    )
 
 
 # ========== 单词分析（阅读上下文） ==========

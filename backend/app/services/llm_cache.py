@@ -163,16 +163,39 @@ def _evict(db) -> None:
         pass
 
 
+def drop_cached(cache_key: str) -> None:
+    """删除单条缓存（用于丢弃结构不符合预期的脏缓存，实现自愈）"""
+    try:
+        from app.database import SessionLocal
+        from app.models.llm_cache import LLMResultCache
+        db = SessionLocal()
+        try:
+            row = db.query(LLMResultCache).filter(LLMResultCache.cache_key == cache_key).first()
+            if row:
+                db.delete(row)
+                db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[LLM-CACHE] drop failed: {e}")
+
+
 async def cached_json(
     tag: str,
     parts: list[Any],
     factory: Callable[[], Awaitable[Any]],
     ttl_days: int | None = None,
+    validate: Callable[[Any], bool] | None = None,
 ) -> tuple[Any, bool]:
     """带缓存 + 单飞的结果获取
 
     返回 (结果, 是否命中缓存)。
     factory 只在缓存未命中且没有其他协程正在生成时被调用。
+
+    `validate` 用于校验结果结构：**命中缓存但结构不符合预期时，会丢弃该条脏缓存
+    并重新调用 LLM**。这一点很关键 —— 缓存把 LLM 的原始解析结果原样存下来，
+    一旦某次解析形状不对（例如本应是对象却解析成了数组），错误形状会被固化，
+    之后每次命中缓存都会稳定复现同一个故障，且看起来像"偶发 bug"。
     """
     if not settings.LLM_CACHE_ENABLED:
         return await factory(), False
@@ -182,7 +205,10 @@ async def cached_json(
 
     hit = get_cached(key, ttl)
     if hit is not None:
-        return hit, True
+        if validate is None or validate(hit):
+            return hit, True
+        print(f"[LLM-CACHE] 丢弃结构异常的脏缓存 tag={tag}，改为重新生成")
+        drop_cached(key)
 
     # 单飞：同一 key 并发时只让一个协程真正调用 LLM，其余等待复用
     fut = _inflight.get(key)
@@ -206,7 +232,10 @@ async def cached_json(
     try:
         _stats["miss"] += 1
         result = await factory()
-        put_cached(key, tag, result)
+        if validate is None or validate(result):
+            put_cached(key, tag, result)
+        else:
+            print(f"[LLM-CACHE] 结果结构不符合预期，不入缓存 tag={tag}")
         return result, False
     except BaseException as e:
         error = e
