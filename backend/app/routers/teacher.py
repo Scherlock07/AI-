@@ -10,6 +10,9 @@ from app.database import get_db
 from app.models.user import User
 from app.models.teacher import Class, ClassMember, Assignment, ClassroomSpeakingScore
 from app.auth.security import get_current_user, require_teacher
+from app.services.analytics_service import (
+    collect_class_overview, collect_student_profile, MODULES, MODULE_LABELS,
+)
 
 router = APIRouter(prefix="/api/teacher", tags=["教师后台"])
 
@@ -233,7 +236,6 @@ async def class_overview(
     """班级学情总览：各模块均分、成绩分布、预警学生、优秀学生、学生明细"""
     cls = _get_owned_class(class_id, user, db)
     days = max(7, min(days, 180))
-    from app.services.analytics_service import collect_class_overview
     return collect_class_overview(cls, db, days)
 
 
@@ -267,7 +269,6 @@ async def student_profile(
             raise HTTPException(status_code=403, detail="该学生不在你的任何班级中")
 
     days = max(7, min(days, 180))
-    from app.services.analytics_service import collect_student_profile
     return collect_student_profile(student, db, days)
 
 
@@ -280,7 +281,6 @@ async def class_analysis_report(
     cls = _get_owned_class(class_id, user, db)
     days = max(7, min(days, 180))
 
-    from app.services.analytics_service import collect_class_overview
     overview = collect_class_overview(cls, db, days)
 
     from app.services import llm_service
@@ -299,43 +299,107 @@ async def class_analysis_report(
 
 # ========== 作业管理 ==========
 
+class AssignmentPayload(BaseModel):
+    class_id: str = ""
+    title: str = ""
+    description: str = ""
+    module: str = ""
+    difficulty: str = "intermediate"
+    due_date: str = ""
+
+
 @router.post("/assignments", response_model=dict)
 async def create_assignment(
-    class_id: str, title: str, description: str, module: str,
+    class_id: str = "", title: str = "", description: str = "", module: str = "",
     difficulty: str = "intermediate", due_date: str = "",
+    payload: AssignmentPayload | None = Body(default=None),
     db: Session = Depends(get_db), user: User = Depends(require_teacher),
 ):
-    from datetime import datetime
+    """布置作业（兼容 JSON body 与 query 参数）"""
+    if payload:
+        class_id = payload.class_id or class_id
+        title = payload.title or title
+        description = payload.description or description
+        module = payload.module or module
+        difficulty = payload.difficulty or difficulty
+        due_date = payload.due_date or due_date
+
+    clean_title = (title or "").strip()
+    if not clean_title:
+        raise HTTPException(status_code=400, detail="作业标题不能为空")
+    if len(clean_title) > 200:
+        raise HTTPException(status_code=400, detail="作业标题不能超过 200 个字符")
+    if module not in MODULES:
+        raise HTTPException(status_code=400, detail=f"模块无效，须为 {MODULES} 之一")
+
+    # 归属校验：只能给本人班级布置作业
+    cls = _get_owned_class(class_id, user, db)
+
+    parsed_due = None
+    if due_date:
+        try:
+            parsed_due = datetime.fromisoformat(due_date.replace("Z", "+00:00").replace("+00:00", ""))
+        except Exception:
+            raise HTTPException(status_code=400, detail="截止时间格式无效")
+
     assignment = Assignment(
-        class_id=class_id,
+        class_id=cls.id,
         teacher_id=user.id,
-        title=title,
-        description=description,
+        title=clean_title,
+        description=description or "",
         module=module,
         difficulty=difficulty,
-        due_date=datetime.fromisoformat(due_date) if due_date else None,
+        due_date=parsed_due,
     )
     db.add(assignment)
     db.commit()
     db.refresh(assignment)
-    return {"id": assignment.id, "title": assignment.title}
+    return {
+        "id": assignment.id,
+        "title": assignment.title,
+        "module": assignment.module,
+        "due_date": assignment.due_date.isoformat() if assignment.due_date else None,
+    }
 
 
-@router.get("/assignments/{class_id}", response_model=list[dict])
+@router.delete("/assignments/{assignment_id}", response_model=dict)
+async def delete_assignment(assignment_id: str, db: Session = Depends(get_db), user: User = Depends(require_teacher)):
+    """删除作业（仅限本人班级）"""
+    a = db.query(Assignment).filter(Assignment.id == assignment_id).first()
+    if not a:
+        raise HTTPException(status_code=404, detail="作业不存在")
+    _get_owned_class(a.class_id, user, db)
+    db.delete(a)
+    db.commit()
+    return {"id": assignment_id, "message": "作业已删除"}
+
+
+@router.get("/assignments/{class_id}", response_model=dict)
 async def list_assignments(class_id: str, db: Session = Depends(get_db), user: User = Depends(require_teacher)):
-    assignments = db.query(Assignment).filter(Assignment.class_id == class_id).all()
-    return [
-        {
-            "id": a.id,
-            "title": a.title,
-            "description": a.description,
-            "module": a.module,
-            "difficulty": a.difficulty,
-            "due_date": a.due_date.isoformat() if a.due_date else None,
-            "created_at": a.created_at.isoformat() if a.created_at else "",
-        }
-        for a in assignments
-    ]
+    """作业列表（含各作业的提交情况估算）"""
+    cls = _get_owned_class(class_id, user, db)
+    assignments = db.query(Assignment).filter(Assignment.class_id == cls.id)\
+        .order_by(Assignment.created_at.desc()).all()
+    member_count = db.query(ClassMember).filter(ClassMember.class_id == cls.id).count()
+    return {
+        "class_id": cls.id,
+        "class_name": cls.name,
+        "member_count": member_count,
+        "assignments": [
+            {
+                "id": a.id,
+                "title": a.title,
+                "description": a.description,
+                "module": a.module,
+                "module_label": MODULE_LABELS.get(a.module, a.module),
+                "difficulty": a.difficulty,
+                "due_date": a.due_date.isoformat() if a.due_date else None,
+                "created_at": a.created_at.isoformat() if a.created_at else "",
+                "is_overdue": bool(a.due_date and a.due_date < datetime.utcnow()),
+            }
+            for a in assignments
+        ],
+    }
 
 
 # ========== 课堂口语评分 ==========

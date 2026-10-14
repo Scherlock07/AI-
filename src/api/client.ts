@@ -341,19 +341,24 @@ export const teacherApi = {
 
   classStats: (classId: string) => request(`/api/teacher/classes/${classId}/stats`),
 
-  createAssignment: (data: { class_id: string; title: string; description: string; module: string; difficulty?: string; due_date?: string }) => {
-    const params = new URLSearchParams({
-      class_id: data.class_id,
-      title: data.title,
-      description: data.description,
-      module: data.module,
-      difficulty: data.difficulty || 'intermediate',
-    })
-    if (data.due_date) params.set('due_date', data.due_date)
-    return request(`/api/teacher/assignments?${params}`, { method: 'POST' })
-  },
+  createAssignment: (data: { class_id: string; title: string; description: string; module: string; difficulty?: string; due_date?: string }) =>
+    request('/api/teacher/assignments', {
+      method: 'POST',
+      body: JSON.stringify({
+        class_id: data.class_id,
+        title: data.title,
+        description: data.description || '',
+        module: data.module,
+        difficulty: data.difficulty || 'intermediate',
+        due_date: data.due_date || '',
+      }),
+    }),
 
+  /** 作业列表，返回 { class_id, class_name, member_count, assignments: [...] } */
   listAssignments: (classId: string) => request(`/api/teacher/assignments/${classId}`),
+
+  deleteAssignment: (assignmentId: string) =>
+    request(`/api/teacher/assignments/${assignmentId}`, { method: 'DELETE' }),
 
   updateClass: (classId: string, name: string, description: string = '') =>
     request(`/api/teacher/classes/${classId}?name=${encodeURIComponent(name)}&description=${encodeURIComponent(description)}`, { method: 'PUT' }),

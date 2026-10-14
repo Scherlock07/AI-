@@ -6,9 +6,11 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { LoadingSpinner, EmptyState } from '@/components/ui/Loading'
 import { cn, getScoreColor } from '@/lib/utils'
+import { exportReportAsWord, printReport } from '@/lib/reportExport'
 import {
   Sparkles, AlertTriangle, TrendingUp, Users, Clock, Target,
   FileText, Lightbulb, ChevronRight, RefreshCw, Printer, RotateCcw,
+  FileDown,
 } from 'lucide-react'
 import {
   ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, Radar,
@@ -80,6 +82,29 @@ export function ClassAnalyticsView({
     } finally {
       setReportLoading(false)
     }
+  }
+
+  /** 导出/打印选项：优先用 AI 报告；无报告时用真实统计降级导出 */
+  const buildExportOpts = () => ({
+    className: className || overview?.class_name || '班级',
+    days,
+    overview,
+    report: report?.report || null,
+    focus: focus || undefined,
+  })
+
+  const handleExportWord = () => {
+    try {
+      exportReportAsWord(buildExportOpts())
+      toast('报告已导出为 Word 文档', 'success')
+    } catch (e: any) {
+      toast(e.message || '导出失败', 'error')
+    }
+  }
+
+  const handlePrint = () => {
+    const ok = printReport(buildExportOpts())
+    if (!ok) toast('浏览器拦截了新窗口，请允许弹出窗口后重试', 'error')
   }
 
   if (loading) {
@@ -403,11 +428,14 @@ export function ClassAnalyticsView({
               <Sparkles className="w-4 h-4 text-indigo-500" />
               针对性分析报告
             </CardTitle>
-            {report && (
-              <Button size="sm" variant="outline" onClick={() => window.print()}>
-                <Printer className="w-3.5 h-3.5" />打印 / 导出
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={handleExportWord}>
+                <FileDown className="w-3.5 h-3.5" />导出 Word
               </Button>
-            )}
+              <Button size="sm" variant="outline" onClick={handlePrint}>
+                <Printer className="w-3.5 h-3.5" />打印 / PDF
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent>

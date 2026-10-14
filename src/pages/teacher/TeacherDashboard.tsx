@@ -47,10 +47,30 @@ export function TeacherDashboard() {
   const [savingEdit, setSavingEdit] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; member_count: number } | null>(null)
   const [deleting, setDeleting] = useState(false)
+  // 解散班级需输入班名二次确认，防止多班时误删
+  const [deleteConfirmName, setDeleteConfirmName] = useState('')
+
+  // 打开解散确认时清空输入框
+  const openDeleteConfirm = (c: { id: string; name: string; member_count: number }) => {
+    setDeleteConfirmName('')
+    setDeleteTarget(c)
+  }
   const [regenLoading, setRegenLoading] = useState(false)
+  // 复制失败时的兜底：把邀请码显示在可手动选择的输入框里
+  const [manualCode, setManualCode] = useState<string | null>(null)
 
   // 学生详情抽屉
   const [detailStudent, setDetailStudent] = useState<{ id: string; name: string } | null>(null)
+
+  // 布置作业
+  const [showAssignment, setShowAssignment] = useState(false)
+  const [aTitle, setATitle] = useState('')
+  const [aDesc, setADesc] = useState('')
+  const [aModule, setAModule] = useState('listening')
+  const [aDifficulty, setADifficulty] = useState('intermediate')
+  const [aDueDate, setADueDate] = useState('')
+  const [savingAssignment, setSavingAssignment] = useState(false)
+  const [deletingAssignmentId, setDeletingAssignmentId] = useState<string | null>(null)
 
   // 班级学情概览（用于班级能力雷达）
   const [analytics, setAnalytics] = useState<any>(null)
@@ -61,20 +81,53 @@ export function TeacherDashboard() {
     if (!currentClass) return
     const code = currentClass.invite_code || ''
     const text = `邀请你加入「${currentClass.name}」班级\n邀请码：${code}\n加入方式：登录 AI 外语学习平台 → 我的班级 → 输入邀请码`
-    try {
-      await navigator.clipboard.writeText(text)
+
+    // 优先用现代 Clipboard API（需 HTTPS / localhost 安全上下文）
+    const tryModern = async (v: string) => {
+      if (!navigator.clipboard || !window.isSecureContext) return false
+      try {
+        await navigator.clipboard.writeText(v)
+        return true
+      } catch {
+        return false
+      }
+    }
+    // 兜底：execCommand（HTTP 非安全上下文下可用）
+    const tryLegacy = (v: string) => {
+      try {
+        const ta = document.createElement('textarea')
+        ta.value = v
+        ta.setAttribute('readonly', '')
+        ta.style.position = 'fixed'
+        ta.style.top = '-1000px'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        ta.setSelectionRange(0, v.length)
+        const ok = document.execCommand('copy')
+        document.body.removeChild(ta)
+        return ok
+      } catch {
+        return false
+      }
+    }
+
+    let ok = await tryModern(text)
+    if (!ok) ok = tryLegacy(text)
+    // 完整文案失败则退而只复制邀请码
+    if (!ok) {
+      ok = await tryModern(code)
+      if (!ok) ok = tryLegacy(code)
+    }
+
+    if (ok) {
       setCopied(true)
       toast('邀请信息已复制，可发送给学生', 'success')
       setTimeout(() => setCopied(false), 2000)
-    } catch {
-      try {
-        await navigator.clipboard.writeText(code)
-        setCopied(true)
-        toast('邀请码已复制', 'success')
-        setTimeout(() => setCopied(false), 2000)
-      } catch {
-        toast('复制失败，请手动记录邀请码：' + code, 'info')
-      }
+    } else {
+      // 最终兜底：弹出手动复制框，避免"点了没反应"
+      setManualCode(code)
+      toast('浏览器限制自动复制，请在本页手动选择复制', 'info')
     }
   }
 
@@ -128,12 +181,13 @@ export function TeacherDashboard() {
     setDeleting(true)
     try {
       await teacherApi.deleteClass(deleteTarget.id)
+      toast(`班级「${deleteTarget.name}」已解散`, 'success')
       setDeleteTarget(null)
+      setDeleteConfirmName('')
       if (selectedClass === deleteTarget.id) setSelectedClass(null)
       setStudents([])
       setAssignments([])
       await fetchClasses()
-      toast('班级已解散', 'success')
     } catch (err: any) {
       toast(err.message || '删除失败', 'error')
     } finally {
@@ -157,6 +211,57 @@ export function TeacherDashboard() {
       setLoading(false)
     }
   }
+
+  // ===== 作业布置 =====
+  const openAssignmentForm = () => {
+    setATitle('')
+    setADesc('')
+    setAModule('listening')
+    setADifficulty('intermediate')
+    setADueDate('')
+    setShowAssignment(true)
+  }
+
+  const handleCreateAssignment = async () => {
+    if (!selectedClass) return
+    const title = aTitle.trim()
+    if (!title) {
+      toast('请填写作业标题', 'error')
+      return
+    }
+    setSavingAssignment(true)
+    try {
+      await teacherApi.createAssignment({
+        class_id: selectedClass,
+        title,
+        description: aDesc.trim(),
+        module: aModule,
+        difficulty: aDifficulty,
+        due_date: aDueDate ? new Date(aDueDate).toISOString() : '',
+      })
+      setShowAssignment(false)
+      await fetchClassData(selectedClass)
+      toast(`作业「${title}」已布置`, 'success')
+    } catch (err: any) {
+      toast(err.message || '布置作业失败', 'error')
+    } finally {
+      setSavingAssignment(false)
+    }
+  }
+
+  const handleDeleteAssignment = async (id: string, title: string) => {
+    setDeletingAssignmentId(id)
+    try {
+      await teacherApi.deleteAssignment(id)
+      if (selectedClass) await fetchClassData(selectedClass)
+      toast(`作业「${title}」已删除`, 'success')
+    } catch (err: any) {
+      toast(err.message || '删除作业失败', 'error')
+    } finally {
+      setDeletingAssignmentId(null)
+    }
+  }
+
 
   const fetchClassData = async (classId: string) => {
     try {
@@ -316,13 +421,21 @@ export function TeacherDashboard() {
           </Card>
         ) : (
           <>
-            {classes.length > 1 && (
-              <div className="flex gap-2 mb-4 flex-wrap">
+            {classes.length > 0 && (
+              <div className="flex items-center gap-2 mb-4 flex-wrap">
+                <span className="text-xs text-gray-400 shrink-0 flex items-center gap-1">
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                  {classes.length > 1 ? '选择要分析的班级：' : '当前班级：'}
+                </span>
                 {classes.map((c) => (
                   <button key={c.id} onClick={() => setSelectedClass(c.id)}
-                    className={cn('px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
-                      selectedClass === c.id ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200')}>
+                    className={cn('px-3 py-1.5 rounded-lg text-sm font-medium transition-all inline-flex items-center gap-1.5',
+                      selectedClass === c.id ? 'bg-indigo-600 text-white shadow-sm' : 'bg-gray-100 text-gray-500 hover:bg-gray-200')}>
+                    {selectedClass === c.id && <Check className="w-3.5 h-3.5" />}
                     {c.name}
+                    <span className={cn('text-xs', selectedClass === c.id ? 'text-indigo-100' : 'text-gray-400')}>
+                      {c.member_count || 0}人
+                    </span>
                   </button>
                 ))}
               </div>
@@ -364,14 +477,25 @@ export function TeacherDashboard() {
         </Card>
       )}
 
-      {/* Class Selector */}
-      {classes.length > 1 && (
-        <div className="flex gap-2 mb-4 flex-wrap">
+      {/* Class Selector —— 始终显示，让"当前操作的是哪个班"一目了然（避免多班时误操作） */}
+      {classes.length > 0 && (
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
+          <span className="text-xs text-gray-400 shrink-0 flex items-center gap-1">
+            <LayoutGrid className="w-3.5 h-3.5" />
+            {classes.length > 1 ? '选择要管理的班级：' : '当前班级：'}
+          </span>
           {classes.map((c) => (
             <button key={c.id} onClick={() => setSelectedClass(c.id)}
-              className={cn('px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
-                selectedClass === c.id ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200')}>
+              className={cn('px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-1.5',
+                selectedClass === c.id
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200')}>
+              {selectedClass === c.id && <Check className="w-3.5 h-3.5" />}
               {c.name}
+              <span className={cn('text-xs',
+                selectedClass === c.id ? 'text-indigo-200' : 'text-gray-400')}>
+                {c.member_count || 0}人
+              </span>
             </button>
           ))}
         </div>
@@ -406,7 +530,7 @@ export function TeacherDashboard() {
                 </Button>
                 <Button size="sm" variant="outline"
                   className="text-red-600 border-red-200 hover:bg-red-50"
-                  onClick={() => setDeleteTarget(currentClass)}>
+                  onClick={() => openDeleteConfirm(currentClass)}>
                   <Trash2 className="w-3.5 h-3.5" />解散班级
                 </Button>
               </div>
@@ -424,7 +548,7 @@ export function TeacherDashboard() {
                 </div>
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
                   <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-indigo-50 border border-indigo-100">
-                    <span className="text-2xl font-bold tracking-[0.2em] text-indigo-700 font-mono">
+                    <span className="text-2xl font-bold tracking-[0.2em] text-indigo-700 font-mono select-all">
                       {currentClass.invite_code}
                     </span>
                   </div>
@@ -438,6 +562,22 @@ export function TeacherDashboard() {
                       重置邀请码
                     </Button>
                   </div>
+                </div>
+
+                {/* 复制失败兜底：给一个可全选的手动复制框，且文案本身也可选中 */}
+                <div className="mt-3 pt-3 border-t border-dashed border-indigo-100">
+                  <label className="text-xs text-gray-500 mb-1.5 block">
+                    若一键复制不可用（浏览器限制），可直接选中下方文字复制：
+                  </label>
+                  <textarea
+                    readOnly
+                    value={`邀请你加入「${currentClass.name}」班级\n邀请码：${currentClass.invite_code}\n加入方式：登录 AI 外语学习平台 → 我的班级 → 输入邀请码`}
+                    onFocus={(e) => e.currentTarget.select()}
+                    onClick={(e) => e.currentTarget.select()}
+                    rows={3}
+                    className="w-full px-3 py-2 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-lg resize-none focus:outline-none focus:border-indigo-300 select-all"
+                  />
+                  <div className="text-xs text-gray-400 mt-1 text-right">点击文字即可全选</div>
                 </div>
               </div>
             )}
@@ -485,7 +625,9 @@ export function TeacherDashboard() {
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <CardTitle>学生列表</CardTitle>
-                  <Button size="sm" variant="outline" onClick={() => toast('报告导出功能开发中', 'info')}><Download className="w-3 h-3" />导出报告</Button>
+                  <Button size="sm" variant="outline" onClick={() => setView('analysis')}>
+                    <BarChart3 className="w-3 h-3" />导出报告
+                  </Button>
                 </div>
               </CardHeader>
               <CardContent>
@@ -579,28 +721,45 @@ export function TeacherDashboard() {
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-base">近期作业</CardTitle>
-                  <Button size="sm" variant="ghost" onClick={() => toast('布置作业功能开发中', 'info')}><Settings className="w-3 h-3" /></Button>
+                  <Button size="sm" variant="outline" onClick={openAssignmentForm}>
+                    <Plus className="w-3 h-3" />布置作业
+                  </Button>
                 </div>
               </CardHeader>
               <CardContent>
                 {assignments.length === 0 ? (
-                  <EmptyState title="暂无作业" desc="点击布置作业为学生分配任务" />
+                  <EmptyState title="暂无作业" desc="点击「布置作业」为学生分配任务" />
                 ) : (
                   <div className="space-y-3">
                     {assignments.map((a: any, i: number) => {
-                      const submitted = a.submitted_count || a.submitted || 0
-                      const total = a.total_count || a.total || totalStudents
+                      const due = a.due_date ? new Date(a.due_date) : null
+                      const overdue = a.is_overdue
                       return (
-                        <div key={a.id || i} className="p-3 border border-gray-100 rounded-lg">
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-sm font-medium text-gray-700">{a.title || a.name || '作业'}</span>
-                            <Badge variant="warning">{a.due_date || a.due_date ? new Date(a.due_date).toLocaleDateString('zh-CN') : '待定'}</Badge>
+                        <div key={a.id || i} className="p-3 border border-gray-100 rounded-lg group">
+                          <div className="flex items-start justify-between gap-2 mb-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-medium text-gray-700 truncate">{a.title || '作业'}</div>
+                              {a.description && (
+                                <div className="text-xs text-gray-400 mt-0.5 line-clamp-2">{a.description}</div>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => handleDeleteAssignment(a.id, a.title || '作业')}
+                              disabled={deletingAssignmentId === a.id}
+                              className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors shrink-0"
+                              title="删除作业"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
                           </div>
-                          <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
-                            <span>提交情况</span>
-                            <span>{submitted}/{total}</span>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <Badge variant="primary">{a.module_label || a.module || '综合'}</Badge>
+                            <Badge variant={overdue ? 'danger' : 'success'}>
+                              {due
+                                ? `${overdue ? '已过期 ' : '截止 '}${due.toLocaleDateString('zh-CN')}`
+                                : '长期有效'}
+                            </Badge>
                           </div>
-                          <Progress value={total > 0 ? (submitted / total) * 100 : 0} />
                         </div>
                       )
                     })}
@@ -659,6 +818,83 @@ export function TeacherDashboard() {
         </div>
       )}
 
+      {/* 布置作业弹窗 */}
+      {showAssignment && currentClass && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 animate-fadeIn"
+          onClick={() => !savingAssignment && setShowAssignment(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 sticky top-0 bg-white">
+              <div className="flex items-center gap-2">
+                <ClipboardList className="w-4 h-4 text-indigo-500" />
+                <h3 className="font-semibold text-gray-800">布置作业</h3>
+              </div>
+              <button onClick={() => setShowAssignment(false)} disabled={savingAssignment}
+                className="p-1 rounded-lg hover:bg-gray-100 text-gray-400">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="px-5 py-4 space-y-4">
+              <div className="px-3 py-2 rounded-lg bg-indigo-50 text-xs text-indigo-700">
+                作业将布置给：<b>{currentClass.name}</b>（{currentClass.member_count || 0} 名学生）
+              </div>
+              <div>
+                <label className="text-sm font-medium text-gray-700 mb-1.5 block">
+                  作业标题 <span className="text-red-500">*</span>
+                </label>
+                <input value={aTitle} onChange={(e) => setATitle(e.target.value)}
+                  maxLength={200} autoFocus
+                  placeholder="如：Unit 3 听力精听训练"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm font-medium text-gray-700 mb-1.5 block">所属模块</label>
+                  <select value={aModule} onChange={(e) => setAModule(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400 bg-white">
+                    <option value="listening">听力</option>
+                    <option value="speaking">口语</option>
+                    <option value="reading">阅读</option>
+                    <option value="writing">写作</option>
+                    <option value="vocabulary">词汇语法</option>
+                    <option value="translation">翻译</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700 mb-1.5 block">难度</label>
+                  <select value={aDifficulty} onChange={(e) => setADifficulty(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400 bg-white">
+                    <option value="beginner">初级</option>
+                    <option value="intermediate">中级</option>
+                    <option value="advanced">高级</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="text-sm font-medium text-gray-700 mb-1.5 block">截止日期（可选）</label>
+                <input type="date" value={aDueDate} onChange={(e) => setADueDate(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400" />
+                <div className="text-xs text-gray-400 mt-1">留空表示长期有效</div>
+              </div>
+              <div>
+                <label className="text-sm font-medium text-gray-700 mb-1.5 block">作业说明（可选）</label>
+                <textarea value={aDesc} onChange={(e) => setADesc(e.target.value)}
+                  rows={3} maxLength={500}
+                  placeholder="如：完成后在听力模块提交自测成绩，要求正确率 80% 以上"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400 resize-none" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100">
+              <Button variant="outline" onClick={() => setShowAssignment(false)} disabled={savingAssignment}>取消</Button>
+              <Button onClick={handleCreateAssignment} disabled={savingAssignment || !aTitle.trim()}>
+                {savingAssignment ? <LoadingSpinner size="sm" /> : null}
+                {savingAssignment ? '布置中...' : '确认布置'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 解散班级确认弹窗 */}
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 animate-fadeIn"
@@ -674,21 +910,47 @@ export function TeacherDashboard() {
               </div>
             </div>
             <div className="p-5">
-              <div className="p-3 rounded-xl bg-gray-50 border border-gray-100 mb-3">
-                <div className="text-sm font-medium text-gray-800">{deleteTarget.name}</div>
+              {/* 明确强调：只删这一个班，且需输入班名二次确认，杜绝误删 */}
+              <div className="p-3.5 rounded-xl bg-red-50/60 border border-red-100 mb-4">
+                <div className="text-xs text-red-500 mb-1 flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5" />即将解散的班级（仅此一个）
+                </div>
+                <div className="text-base font-semibold text-gray-900 break-all">{deleteTarget.name}</div>
                 <div className="text-xs text-gray-400 mt-1">
                   当前班级人数：{deleteTarget.member_count || 0} 人
+                  {classes.length > 1 && (
+                    <span className="ml-2 text-indigo-500">
+                      （你的其他 {classes.length - 1} 个班级不受影响）
+                    </span>
+                  )}
                 </div>
               </div>
-              <ul className="text-xs text-gray-500 space-y-1.5 leading-relaxed">
-                <li>· 班级内全部学生成员关系将被移除</li>
-                <li>· 已布置的作业与课堂评分记录将一并删除</li>
+              <ul className="text-xs text-gray-500 space-y-1.5 leading-relaxed mb-4">
+                <li>· 该班级内全部学生成员关系将被移除</li>
+                <li>· 该班级已布置的作业与课堂评分记录将一并删除</li>
                 <li>· 学生端「我的班级」中将不再显示该班级</li>
               </ul>
+              <div>
+                <label className="text-sm font-medium text-gray-700 mb-1.5 block">
+                  请输入班级名称以确认：<span className="text-red-500">*</span>
+                </label>
+                <input
+                  value={deleteConfirmName}
+                  onChange={(e) => setDeleteConfirmName(e.target.value)}
+                  placeholder={deleteTarget.name}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-red-400"
+                />
+                {deleteConfirmName && deleteConfirmName.trim() !== deleteTarget.name && (
+                  <div className="text-xs text-red-500 mt-1.5">
+                    名称不一致，无法解散。请完整输入「{deleteTarget.name}」
+                  </div>
+                )}
+              </div>
             </div>
             <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100">
               <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleting}>取消</Button>
-              <Button variant="danger" onClick={handleDeleteClass} disabled={deleting}>
+              <Button variant="danger" onClick={handleDeleteClass}
+                disabled={deleting || deleteConfirmName.trim() !== deleteTarget.name}>
                 {deleting ? <LoadingSpinner size="sm" /> : <Trash2 className="w-3.5 h-3.5" />}
                 {deleting ? '解散中...' : '确认解散'}
               </Button>
