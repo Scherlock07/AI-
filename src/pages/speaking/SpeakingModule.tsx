@@ -372,7 +372,14 @@ function RecordingPanel({ title, topic, referenceText, onResult }: {
         setNote('')
       } else if (previewText) {
         setTranscript(previewText)
-        setNote(`自动转写未成功（${res?.error || '未知原因'}），已保留浏览器实时预览文本，请核对后提交。`)
+        setNote(res?.source === 'unavailable'
+          ? '已使用浏览器实时预览文本，请核对并补全后提交。'
+          : `自动转写未成功（${res?.error || '未知原因'}），已保留浏览器实时预览文本，请核对后提交。`)
+      } else if (res?.source === 'unavailable') {
+        // 服务端未接入语音识别时，不要把"服务器未配置…"这类内部信息抛给学生，
+        // 给一句可执行的提示即可
+        setNote('语音转写服务暂时不可用，请把你刚才口述的内容输入到下方文本框中完成评分。')
+        toast('语音转写服务暂时不可用，请手动输入口述内容', 'warning')
       } else {
         setNote(`自动转写未成功：${res?.error || '未知原因'}。请在下方输入你口述的内容后再提交评分。`)
         toast('自动转写失败，请手动输入口述内容', 'warning')
