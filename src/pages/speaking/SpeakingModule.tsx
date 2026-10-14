@@ -12,6 +12,7 @@ import { Skeleton, ErrorState, EmptyState, LoadingSpinner } from '@/components/u
 import { cn, formatDuration, getScoreColor } from '@/lib/utils'
 import { formatClock, humanDuration, formatDateTime } from '@/lib/usePracticeTimer'
 import { detectMicCapability } from '@/lib/recording'
+import { AudioRecorder, describeMicError, type RecordedAudio } from '@/lib/audioRecorder'
 import {
   Mic, Play, Pause, Square, Users, Bot,
   Presentation, MessagesSquare, Repeat, GraduationCap, BookOpen,
@@ -71,142 +72,349 @@ export function SpeakingModule() {
 }
 
 // ===== Shared Recording Component =====
+
+/** 录音结果：转写文本 + 音素级发音评估 + 时长 */
+export interface RecordingOutcome {
+  transcript: string
+  pronunciation: any
+  duration: number
+}
+
+/** 分数 → 配色（与全站评分色阶一致：越高越绿，越低越红） */
+function scoreTone(score: number) {
+  if (score >= 85) return { text: 'text-emerald-600', bar: 'bg-emerald-500', soft: 'bg-emerald-50 border-emerald-200 text-emerald-700' }
+  if (score >= 70) return { text: 'text-indigo-600', bar: 'bg-indigo-500', soft: 'bg-indigo-50 border-indigo-200 text-indigo-700' }
+  if (score >= 60) return { text: 'text-amber-600', bar: 'bg-amber-500', soft: 'bg-amber-50 border-amber-200 text-amber-700' }
+  return { text: 'text-rose-600', bar: 'bg-rose-500', soft: 'bg-rose-50 border-rose-200 text-rose-700' }
+}
+
 /**
- * 录音面板：优先使用浏览器语音识别（SpeechRecognition）实时转写，
- * 识别结果通过 onResult(transcript) 回传给评分接口；
- * 浏览器不支持时降级为「手动输入转写文本」模式（同样能拿到真实内容评分）。
+ * 音素级发音评估展示。
+ *
+ * ⚠️ 这个字段此前**前端从未消费过**：后端 `assess_pronunciation` 一直在算
+ * （`granularity=Phoneme`，含逐词、逐音素得分），接口也一直在返回
+ * `pronunciation_detail`，但界面上从来没有渲染，等于白算。
  */
-function RecordingPanel({ title, topic, onResult }: { title: string; topic: string; onResult?: (transcript: string) => void }) {
+function PronunciationPanel({ detail, compact = false }: { detail: any; compact?: boolean }) {
+  if (!detail || typeof detail !== 'object' || !detail.overall_score) return null
+
+  const dims = [
+    { key: 'accuracy_score', label: '准确度', hint: '音素发音与标准音的接近程度' },
+    { key: 'fluency_score', label: '流利度', hint: '停顿、语速与连贯性' },
+    { key: 'completeness_score', label: '完整度', hint: '参考文本被完整读到的比例' },
+    { key: 'prosody_score', label: '韵律', hint: '重音、语调与节奏' },
+  ].filter((d) => typeof detail[d.key] === 'number' && detail[d.key] > 0)
+
+  const words: any[] = Array.isArray(detail.words) ? detail.words : []
+  const parsed = words
+    .map((w) => ({
+      word: String(w?.Word || ''),
+      score: Math.round(Number(w?.PronunciationAssessment?.AccuracyScore ?? 100)),
+      errorType: String(w?.PronunciationAssessment?.ErrorType || 'None'),
+      phonemes: (Array.isArray(w?.Phonemes) ? w.Phonemes : [])
+        .map((p: any) => ({
+          phoneme: String(p?.Phoneme || ''),
+          score: Math.round(Number(p?.PronunciationAssessment?.AccuracyScore ?? 100)),
+        }))
+        .sort((a: any, b: any) => a.score - b.score),
+    }))
+    .filter((w) => w.word)
+
+  // 需要重点纠正：准确度偏低，或 Azure 明确标出了错误类型（漏读/多读/错读）
+  const weak = parsed
+    .filter((w) => w.score < 70 || w.errorType !== 'None')
+    .sort((a, b) => a.score - b.score)
+    .slice(0, compact ? 3 : 8)
+
+  const overall = Math.round(detail.overall_score)
+  const tone = scoreTone(overall)
+
+  return (
+    <div className="mt-4 rounded-xl border border-gray-200 bg-white overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Volume2 className="w-4 h-4 text-indigo-500" />
+          <span className="text-sm font-semibold text-gray-800">发音评估</span>
+          <Badge variant="primary">音素级</Badge>
+        </div>
+        <div className="flex items-baseline gap-1">
+          <span className={cn('text-2xl font-bold', tone.text)}>{overall}</span>
+          <span className="text-xs text-gray-400">分</span>
+        </div>
+      </div>
+
+      <div className="px-4 py-3 space-y-2.5">
+        {dims.map((d) => {
+          const v = Math.round(detail[d.key])
+          const t = scoreTone(v)
+          return (
+            <div key={d.key} className="flex items-center gap-3" title={d.hint}>
+              <span className="w-14 shrink-0 text-xs text-gray-500">{d.label}</span>
+              <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                <div className={cn('h-full rounded-full transition-all', t.bar)} style={{ width: `${Math.min(100, v)}%` }} />
+              </div>
+              <span className={cn('w-8 shrink-0 text-right text-xs font-semibold', t.text)}>{v}</span>
+            </div>
+          )
+        })}
+      </div>
+
+      {weak.length > 0 && (
+        <div className="px-4 py-3 border-t border-gray-100 bg-amber-50/40">
+          <p className="text-xs font-medium text-amber-700 mb-2 flex items-center gap-1.5">
+            <AlertCircle className="w-3.5 h-3.5" />
+            建议重点纠正的发音
+          </p>
+          <div className="space-y-1.5">
+            {weak.map((w, i) => {
+              const t = scoreTone(w.score)
+              const errLabel =
+                w.errorType === 'Mispronunciation' ? '发音不准'
+                  : w.errorType === 'Omission' ? '漏读'
+                    : w.errorType === 'Insertion' ? '多读'
+                      : ''
+              // 最差的 3 个音素最能说明问题（例如 th / θ/、r /ɹ/、v /v/）
+              const weakPhonemes = w.phonemes.filter((p: any) => p.score < 80).slice(0, 4)
+              return (
+                <div key={`${w.word}-${i}`} className="flex items-start gap-2 text-xs">
+                  <span className="font-mono font-semibold text-gray-800 shrink-0">{w.word}</span>
+                  <span className={cn('shrink-0 font-semibold', t.text)}>{w.score}</span>
+                  {errLabel && <span className={cn('shrink-0 px-1.5 rounded border text-[10px]', t.soft)}>{errLabel}</span>}
+                  {weakPhonemes.length > 0 && (
+                    <span className="text-gray-400 font-mono truncate">
+                      {weakPhonemes.map((p: any) => `${p.phoneme} ${p.score}`).join(' · ')}
+                    </span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {parsed.length > 0 && (
+        <div className="px-4 py-3 border-t border-gray-100">
+          <p className="text-xs text-gray-400 mb-2">逐词得分（颜色越红代表该词发音问题越大）</p>
+          <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
+            {parsed.slice(0, 80).map((w, i) => {
+              const t = scoreTone(w.score)
+              return (
+                <span
+                  key={`${w.word}-${i}`}
+                  title={`${w.word} · ${w.score} 分${w.phonemes.length ? '\n音素：' + w.phonemes.map((p: any) => `${p.phoneme} ${p.score}`).join(', ') : ''}`}
+                  className={cn('px-1.5 py-0.5 rounded border text-[11px] font-mono cursor-default', t.soft)}
+                >
+                  {w.word}
+                </span>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * 录音面板。
+ *
+ * **采集**：`getUserMedia + MediaRecorder`（浏览器只负责录音）
+ * **识别**：上传自有后端 `/api/speaking/transcribe` → 平台自己的 Azure Speech
+ *
+ * 相比旧实现（浏览器 Web Speech API 直接转写），这一版：
+ *   · Chrome 不再因连不上 Google 的识别服务而失效（原来只有 Edge 能用）
+ *   · 长语音不再被截断（后端改为连续识别）
+ *   · 顺带拿到音素级发音评估，学生能看到"具体哪个音读错了"
+ *   · 识别质量由平台自己掌控，不再取决于浏览器厂商服务的可达性
+ */
+function RecordingPanel({ title, topic, referenceText, onResult }: {
+  title: string
+  topic: string
+  referenceText?: string
+  onResult?: (r: RecordingOutcome) => void
+}) {
   const { toast } = useToast()
-  const [isRecording, setIsRecording] = useState(false)
+  const [phase, setPhase] = useState<'idle' | 'recording' | 'transcribing' | 'ready'>('idle')
   const [duration, setDuration] = useState(0)
   const [transcript, setTranscript] = useState('')
-  const [interim, setInterim] = useState('')
-  const [finished, setFinished] = useState(false)
-  // 录音可用性判据：必须看安全上下文，不能用「构造函数是否存在」
-  // （HTTP 下 window.webkitSpeechRecognition 仍存在，用它判断会误入假录音态）
+  const [preview, setPreview] = useState('')
+  const [pronunciation, setPronunciation] = useState<any>({})
+  const [note, setNote] = useState('')
   const [cap] = useState(() => detectMicCapability())
-  const srSupported = cap.canLiveTranscribe
+
+  const recorderRef = useRef<AudioRecorder | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const recognitionRef = useRef<any>(null)
-  const transcriptRef = useRef('')
+  const previewRef = useRef('')
 
+  const isRecording = phase === 'recording'
+  const isTranscribing = phase === 'transcribing'
+  const showEditor = isRecording || isTranscribing || phase === 'ready' || !cap.canCapture
+
+  // 计时
   useEffect(() => {
     if (isRecording) {
-      timerRef.current = setInterval(() => setDuration(d => d + 1), 1000)
-    } else if (timerRef) {
-      clearInterval(timerRef.current!)
+      timerRef.current = setInterval(() => setDuration((d) => d + 1), 1000)
+    } else if (timerRef.current) {
+      clearInterval(timerRef.current)
+      timerRef.current = null
     }
-    return () => { if (timerRef) clearInterval(timerRef.current!) }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current)
+    }
   }, [isRecording])
 
-  // 卸载时停止识别
+  // 卸载时彻底释放麦克风
   useEffect(() => {
-    return () => { try { recognitionRef.current?.stop() } catch {} }
+    return () => {
+      try { recorderRef.current?.cancel() } catch {}
+      stopPreview()
+    }
   }, [])
 
-  const startRecognition = () => {
+  /** 浏览器实时预览（纯增益，失败一律静默；识别结果以后端转写为准） */
+  function startPreview() {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (!SR) return false
+    if (!SR) return
     try {
       const rec = new SR()
       rec.lang = 'en-US'
       rec.continuous = true
       rec.interimResults = true
-      let finalText = ''
       rec.onresult = (e: any) => {
-        let interimText = ''
-        for (let i = e.resultIndex; i < e.results.length; i++) {
-          const r = e.results[i]
-          if (r.isFinal) {
-            finalText += r[0].transcript + ' '
-          } else {
-            interimText += r[0].transcript
-          }
-        }
-        transcriptRef.current = finalText.trim()
-        setTranscript(finalText.trim())
-        setInterim(interimText)
+        let text = ''
+        for (let i = 0; i < e.results.length; i++) text += e.results[i][0].transcript + ' '
+        previewRef.current = text.trim()
+        setPreview(previewRef.current)
       }
-      rec.onerror = (e: any) => {
-        const code = e?.error
-        if (code === 'not-allowed' || code === 'service-not-allowed') {
-          // 采集被浏览器拒绝：必须立即退出录音态。
-          // 否则按钮保持红脉冲、计时器继续走、文案仍写「正在录音并实时转写…」，
-          // 界面与刚弹出的错误提示自相矛盾，学生只会看到「点了在录、其实没录」，
-          // 进而反馈为「麦克风权限没有打开」。现在改为立即停表并切到手动输入。
-          stopRecognition()
-          setIsRecording(false)
-          setInterim('')
-          setFinished(true)
-          toast(cap.message, 'error')
-        } else if (code === 'no-speech') {
-          // 静默处理，continuous 模式下会自动继续
-        } else {
-          toast(`语音识别出错：${code || '未知错误'}，可停止后手动输入转写文本`, 'warning')
-        }
-      }
+      // 预览失败不打扰用户：国内 Chrome 的识别后端本就不可达
+      rec.onerror = () => {}
       rec.onend = () => {
-        // continuous 模式被系统自动停止时，若仍在录音则尝试重启
-        if (recognitionRef.current === rec && isRecording) {
+        if (recognitionRef.current === rec) {
           try { rec.start() } catch {}
         }
       }
       rec.start()
       recognitionRef.current = rec
-      return true
-    } catch {
-      return false
-    }
+    } catch {}
   }
 
-  const stopRecognition = () => {
+  function stopPreview() {
     const rec = recognitionRef.current
     if (rec) {
       rec.onend = null
+      rec.onresult = null
       try { rec.stop() } catch {}
       recognitionRef.current = null
     }
   }
 
-  const handleMicClick = () => {
-    if (!isRecording) {
-      // 非安全上下文（如以 HTTP 访问）下浏览器不会弹出麦克风授权框，
-      // 因此不得进入录音态——直接给出准确原因并切到手动输入模式。
-      if (!cap.canCapture) {
-        toast(cap.message, 'warning')
-        setFinished(true)
-        return
+  const handleStart = async () => {
+    setTranscript('')
+    setPreview('')
+    previewRef.current = ''
+    setPronunciation({})
+    setNote('')
+    setDuration(0)
+
+    const rec = new AudioRecorder()
+    try {
+      await rec.start()
+    } catch (e: any) {
+      rec.cancel()
+      const msg = describeMicError(e)
+      toast(msg, 'error')
+      setNote(msg)
+      setPhase('ready')
+      return
+    }
+    recorderRef.current = rec
+    setPhase('recording')
+    if (cap.canLivePreview) startPreview()
+  }
+
+  const handleStop = async () => {
+    stopPreview()
+    setPhase('transcribing')
+
+    let audio: RecordedAudio | null = null
+    try {
+      audio = recorderRef.current ? await recorderRef.current.stop() : null
+    } catch (e: any) {
+      toast(describeMicError(e), 'error')
+    }
+    recorderRef.current = null
+
+    const previewText = (previewRef.current || '').trim()
+
+    // 录音过短时 MediaRecorder 可能只吐出一个容器头，这种"音频"送去识别必然失败
+    if (!audio || audio.bytes < 1500) {
+      if (previewText) {
+        setTranscript(previewText)
+        setNote('录音过短，未获得有效音频，已保留浏览器实时预览文本，请核对后提交。')
+      } else {
+        setNote('未录到有效音频，请靠近麦克风重试，或直接在下方输入你口述的内容。')
+        toast('未录到有效音频，请重试或手动输入', 'warning')
       }
-      setIsRecording(true)
-      setDuration(0)
-      setTranscript('')
-      setInterim('')
-      transcriptRef.current = ''
-      setFinished(false)
-      if (srSupported && !startRecognition()) {
-        toast('语音识别启动失败，请在下方手动输入转写文本', 'warning')
+      setPhase('ready')
+      return
+    }
+
+    try {
+      const res = await speakingApi.transcribe({
+        audio_base64: audio.base64,
+        mime: audio.mime,
+        reference_text: referenceText || '',
+      })
+      if (res?.transcript) {
+        setTranscript(res.transcript)
+        setPronunciation(res.pronunciation_detail || {})
+        setNote('')
+      } else if (previewText) {
+        setTranscript(previewText)
+        setNote(`自动转写未成功（${res?.error || '未知原因'}），已保留浏览器实时预览文本，请核对后提交。`)
+      } else {
+        setNote(`自动转写未成功：${res?.error || '未知原因'}。请在下方输入你口述的内容后再提交评分。`)
+        toast('自动转写失败，请手动输入口述内容', 'warning')
       }
-    } else {
-      setIsRecording(false)
-      stopRecognition()
-      setInterim('')
-      setFinished(true)
-      const final = (transcriptRef.current || transcript).trim()
-      if (!final && srSupported) {
-        toast('未识别到语音内容，可在下方手动补充转写文本后再提交', 'warning')
+    } catch (e: any) {
+      if (previewText) {
+        setTranscript(previewText)
+        setNote('自动转写请求失败，已保留浏览器实时预览文本。')
+      } else {
+        setNote(`自动转写请求失败：${e?.message || '网络异常'}。可在下方输入口述内容后提交。`)
       }
     }
+    setPhase('ready')
+  }
+
+  const handleMicClick = () => {
+    if (isTranscribing) return
+    if (isRecording) {
+      void handleStop()
+      return
+    }
+    if (!cap.canCapture) {
+      // 非安全上下文（如以 HTTP 访问）下浏览器不会弹出麦克风授权框，
+      // 因此不得进入录音态 —— 直接给出准确原因并切到手动输入模式。
+      toast(cap.message, 'warning')
+      setNote(cap.message)
+      setPhase('ready')
+      return
+    }
+    void handleStart()
   }
 
   const handleSubmit = () => {
-    const final = (transcriptRef.current || transcript).trim()
+    const final = transcript.trim()
     if (!final) {
       toast('请先录音或输入你的口述内容，再提交评分', 'warning')
       return
     }
-    onResult?.(final)
+    onResult?.({ transcript: final, pronunciation, duration })
   }
+
+  const previewText = (transcript + (preview && isRecording ? (transcript ? ' ' : '') + preview : '')).trim()
 
   return (
     <Card>
@@ -214,86 +422,124 @@ function RecordingPanel({ title, topic, onResult }: { title: string; topic: stri
         <div className="flex flex-col items-center py-8">
           <button
             onClick={handleMicClick}
-            aria-label={cap.canCapture ? '开始录音' : '录音不可用，请手动输入'}
+            disabled={isTranscribing}
+            aria-label={isRecording ? '停止录音' : cap.canCapture ? '开始录音' : '录音不可用，请手动输入'}
             className={cn(
               'w-20 h-20 rounded-full flex items-center justify-center transition-all',
               isRecording
                 ? 'bg-red-500 animate-recording'
-                : cap.canCapture
-                  ? 'bg-indigo-600 hover:bg-indigo-700'
-                  : 'bg-gray-300 cursor-not-allowed'
+                : isTranscribing
+                  ? 'bg-gray-300 cursor-wait'
+                  : cap.canCapture
+                    ? 'bg-indigo-600 hover:bg-indigo-700'
+                    : 'bg-gray-300 cursor-not-allowed'
             )}
           >
-            {isRecording ? <Square className="w-8 h-8 text-white" /> : <Mic className="w-8 h-8 text-white" />}
+            {isTranscribing ? (
+              <Loader2 className="w-8 h-8 text-white animate-spin" />
+            ) : isRecording ? (
+              <Square className="w-8 h-8 text-white" />
+            ) : (
+              <Mic className="w-8 h-8 text-white" />
+            )}
           </button>
+
           <p className="mt-4 text-sm text-gray-500">
-            {isRecording
-              ? cap.hint
-              : cap.canCapture
-                ? '点击开始录音'
-                : '录音功能当前不可用，请手动输入'}
+            {isTranscribing
+              ? '正在转写音频，请稍候…'
+              : isRecording
+                ? cap.recordingHint
+                : cap.canCapture
+                  ? phase === 'ready'
+                    ? '可重新录制，或修改下方文本后提交'
+                    : cap.hint
+                  : '录音功能当前不可用，请手动输入'}
           </p>
-          <div className="mt-2 text-2xl font-mono font-bold text-gray-900">
-            {formatDuration(duration)}
-          </div>
+
+          <div className="mt-2 text-2xl font-mono font-bold text-gray-900">{formatDuration(duration)}</div>
+
           {isRecording && (
             <div className="mt-4 flex items-center gap-1">
-              {[0, 1, 2, 3, 4].map(i => (
+              {[0, 1, 2, 3, 4].map((i) => (
                 <div
                   key={i}
                   className="w-1 bg-red-500 rounded-full"
                   style={{
                     height: `${10 + Math.random() * 20}px`,
-                    animation: `pulse 0.${5 + i}s ease-in-out infinite alternate`
+                    animation: `pulse 0.${5 + i}s ease-in-out infinite alternate`,
                   }}
                 />
               ))}
             </div>
           )}
+        </div>
 
-          {/* 实时转写展示（录音不可用时也直接展示手动输入，避免学生无路可走） */}
-          {(isRecording || finished || !cap.canCapture) && (
-            <div className="mt-6 w-full">
-              <div className="flex items-center justify-between mb-1.5">
-                <p className="text-xs font-medium text-gray-500">
-                  {cap.transcriptLabel}
-                </p>
-                {srSupported && (
+        {/* 转写区（录音中 / 转写中 / 已就绪 / 录音不可用时展示，避免学生无路可走） */}
+        {showEditor && (
+          <div className="w-full">
+            <div className="flex items-center justify-between mb-1.5">
+              <p className="text-xs font-medium text-gray-500 flex items-center gap-1.5">
+                {isTranscribing && <Loader2 className="w-3 h-3 animate-spin" />}
+                {isTranscribing ? '正在转写，请稍候…（通常 2–5 秒）' : cap.transcriptLabel}
+              </p>
+              {phase === 'ready' && (transcript || preview) && (
+                <div className="flex items-center gap-3">
+                  {cap.canCapture && (
+                    <button
+                      className="text-xs text-gray-400 hover:text-indigo-500"
+                      onClick={() => { void handleStart() }}
+                    >
+                      重录
+                    </button>
+                  )}
                   <button
                     className="text-xs text-gray-400 hover:text-indigo-500"
-                    onClick={() => { setTranscript(''); transcriptRef.current = '' }}
+                    onClick={() => { setTranscript(''); previewRef.current = ''; setPreview(''); setPronunciation({}) }}
                   >
                     清空
                   </button>
-                )}
-              </div>
-              <textarea
-                value={srSupported ? (transcript + (interim ? ' ' + interim : '')) : transcript}
-                onChange={(e) => {
-                  transcriptRef.current = e.target.value
-                  setTranscript(e.target.value)
-                }}
-                readOnly={srSupported && isRecording}
-                placeholder={srSupported ? '开始说话后，转写内容会实时显示在这里（可停止后修正）' : '录音结束后，请在这里输入你口述的英文内容'}
-                className="w-full min-h-[110px] px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400 resize-y bg-gray-50"
-              />
-              {!cap.canCapture ? (
-                <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
-                  <p className="text-xs text-amber-700 leading-relaxed">{cap.message}</p>
                 </div>
-              ) : !srSupported ? (
-                <p className="text-xs text-gray-400 mt-1">
-                  当前浏览器不支持实时语音识别（建议使用 Chrome / Edge），可直接输入口述内容进行评分。
-                </p>
-              ) : null}
-              <Button className="mt-3 w-full" onClick={handleSubmit} disabled={!(transcriptRef.current || transcript).trim()}>
-                <CheckCircle2 className="w-4 h-4" />
-                提交转写内容，AI 评分
-              </Button>
+              )}
             </div>
-          )}
-        </div>
+
+            <textarea
+              value={isRecording ? previewText : transcript}
+              onChange={(e) => {
+                if (isRecording) return
+                setTranscript(e.target.value)
+              }}
+              readOnly={isRecording}
+              placeholder={
+                isTranscribing
+                  ? '录音已上传，正在由平台语音服务转写…'
+                  : cap.canCapture
+                    ? '点击上方麦克风开始录音，停止后会自动转写为文本（可修改）'
+                    : '录音结束后，请在这里输入你口述的英文内容'
+              }
+              className="w-full min-h-[110px] px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400 resize-y bg-gray-50"
+            />
+
+            {!cap.canCapture ? (
+              <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+                <p className="text-xs text-amber-700 leading-relaxed">{cap.message}</p>
+              </div>
+            ) : note ? (
+              <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+                <p className="text-xs text-amber-700 leading-relaxed">{note}</p>
+              </div>
+            ) : null}
+
+            {/* 转录时顺带算出的发音评估：让学生无需先提交就能看到发音问题 */}
+            <PronunciationPanel detail={pronunciation} compact />
+
+            <Button className="mt-3 w-full" onClick={handleSubmit} disabled={isTranscribing || !transcript.trim()}>
+              <CheckCircle2 className="w-4 h-4" />
+              提交转写内容，AI 评分
+            </Button>
+          </div>
+        )}
       </CardContent>
     </Card>
   )
@@ -487,7 +733,7 @@ function PresentationView() {
     }
   }, [phase, countdown])
 
-  const handleEvaluate = async (transcript?: string) => {
+  const handleEvaluate = async (r: RecordingOutcome) => {
     setPhase('loading')
     setError(null)
     trackFeatureUse('speaking', 'ai_evaluate_presentation')
@@ -495,7 +741,11 @@ function PresentationView() {
       const res = await speakingApi.evaluate({
         type: 'presentation',
         topic: selectedTopic,
-        transcript: transcript || '',
+        transcript: r.transcript,
+        duration: r.duration,
+        // 把录音阶段算出的音素级发音评估一并回传，随练习记录落库；
+        // 否则学生离开页面后就再也看不到自己上次的发音问题。
+        pronunciation_detail: r.pronunciation,
       })
       setResult(res)
       setPhase('result')
@@ -786,19 +1036,23 @@ function PresentationView() {
         {phase === 'result' && !result && error && (
           <Card>
             <CardContent className="pt-5">
-              <ErrorState message={error} onRetry={handleEvaluate} />
+              <ErrorState message={error} onRetry={() => { setError(null); setPhase('record') }} />
             </CardContent>
           </Card>
         )}
       </div>
 
       {phase === 'result' && result ? (
-        <ScoreDisplay
-          scores={result.scores || result.score_details || []}
-          feedback={result.feedback || result.ai_feedback || '暂无评价'}
-          referenceAnswer={result.reference_text || result.reference_answer}
-          warning={result.transcript_warning}
-        />
+        <div className="space-y-4">
+          <ScoreDisplay
+            scores={result.scores || result.score_details || []}
+            feedback={result.feedback || result.ai_feedback || '暂无评价'}
+            referenceAnswer={result.reference_text || result.reference_answer}
+            warning={result.transcript_warning}
+          />
+          {/* 音素级发音评估：此前一直没在界面上展示过 */}
+          <PronunciationPanel detail={result.pronunciation_detail} />
+        </div>
       ) : phase === 'result' && !result ? null : (
         <Card className="flex items-center justify-center min-h-[400px]">
           <div className="text-center">
@@ -2565,15 +2819,17 @@ function RetellingView() {
     setPlaying(false)
   }
 
-  const handleEvaluate = async (transcript?: string) => {
+  const handleEvaluate = async (r: RecordingOutcome) => {
     setPhase('loading')
     setError(null)
     try {
       const res = await speakingApi.evaluate({
         type: 'retelling',
         topic: material.title,
-        transcript: transcript || '',
+        transcript: r.transcript,
         reference_text: material.script,
+        duration: r.duration,
+        pronunciation_detail: r.pronunciation,
       })
       setResult(res)
       setPhase('result')
@@ -2767,7 +3023,7 @@ function RetellingView() {
         )}
 
         {phase === 'recording' && (
-          <RecordingPanel title="复述录音" topic="" onResult={handleEvaluate} />
+          <RecordingPanel title="复述录音" topic="" referenceText={material.script} onResult={handleEvaluate} />
         )}
 
         {phase === 'loading' && (
@@ -2785,7 +3041,7 @@ function RetellingView() {
         {phase === 'result' && !result && error && (
           <Card>
             <CardContent className="pt-5">
-              <ErrorState message={error} onRetry={handleEvaluate} />
+              <ErrorState message={error} onRetry={() => { setError(null); setPhase('recording') }} />
             </CardContent>
           </Card>
         )}
@@ -2797,6 +3053,8 @@ function RetellingView() {
             scores={result.scores || result.score_details || []}
             feedback={result.feedback || result.ai_feedback || '复述评估完成'}
           />
+          {/* 复述是有参考文本的朗读场景，发音评估最精确（含漏读/多读/错读判定） */}
+          <PronunciationPanel detail={result.pronunciation_detail} />
           {material.key_points?.length > 0 && (
             <Card>
               <CardHeader>

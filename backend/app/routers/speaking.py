@@ -14,6 +14,7 @@ from app.models.speaking import (
 from app.auth.security import get_current_user
 from app.schemas.speaking import (
     SpeakingEvaluateRequest, SpeakingEvaluateResult,
+    SpeakingTranscribeRequest, SpeakingTranscribeResult,
     DiscussionRoomCreate, DiscussionRoomResponse,
     DiscussionMessageCreate, DiscussionMessageResponse,
     TopicRecommendRequest, TopicRecommendResponse,
@@ -26,7 +27,7 @@ from app.services.llm_service import (
     evaluate_speaking, recommend_discussion_topics, generate_ai_discussion_reply,
     generate_speaking_topics, generate_retelling_material,
 )
-from app.services.speech_service import assess_pronunciation
+from app.services.speech_service import transcribe_audio
 
 router = APIRouter(prefix="/api/speaking", tags=["口语模块"])
 
@@ -70,25 +71,81 @@ async def generate_retelling(req: GenerateRetellingRequest, user: User = Depends
     return result
 
 
+@router.post("/transcribe", response_model=SpeakingTranscribeResult)
+async def transcribe(req: SpeakingTranscribeRequest, user: User = Depends(get_current_user)):
+    """浏览器录音转写（+ 可选音素级发音评估）
+
+    录音由前端 `getUserMedia + MediaRecorder` 采集，上传到本端点后在**自有后端**
+    完成识别，不再依赖 Chrome(Google) / Edge(Microsoft) 的浏览器内置识别服务 ——
+    国内环境下 Chrome 的浏览器识别后端根本连不通，这是「换了 Edge 才勉强能用」
+    的根因。
+
+    ⚠️ 音频体积：Opus 约 180 KB/分钟，base64 后放大约 1/3，1 分钟录音 ≈ 240 KB，
+    FastAPI/nginx 侧均无压力（nginx `client_max_body_size` 已设 25m）。
+    """
+    import base64
+
+    if not req.audio_base64:
+        raise HTTPException(400, "缺少音频数据")
+
+    # base64 解码失败通常意味着前端传的不是纯 base64（含 dataURL 前缀等）
+    payload = req.audio_base64.strip()
+    if payload.startswith("data:"):
+        payload = payload.split(",", 1)[-1]
+    try:
+        audio_bytes = base64.b64decode(payload, validate=False)
+    except Exception:
+        raise HTTPException(400, "音频数据格式错误")
+
+    if not audio_bytes:
+        raise HTTPException(400, "音频内容为空")
+
+    # 单次录音上限：约 5 分钟（16k 单声道下 Opus 也不过 ~1 MB）
+    if len(audio_bytes) > 8 * 1024 * 1024:
+        raise HTTPException(413, "录音过长，请分段提交（单次不超过 5 分钟）")
+
+    result = await transcribe_audio(
+        audio_bytes,
+        mime=req.mime,
+        reference_text=req.reference_text,
+        language=req.language or "en-US",
+    )
+    return SpeakingTranscribeResult(**result)
+
+
 @router.post("/evaluate", response_model=SpeakingEvaluateResult)
 async def evaluate(req: SpeakingEvaluateRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """评估口语表现（LLM 评估 + 可选 Azure 发音评估）"""
     if not req.transcript and not req.audio_base64:
         raise HTTPException(400, "需要提供转写文本或音频")
 
-    # LLM 评估
-    llm_result = await evaluate_speaking(req.transcript, req.topic, req.type, req.reference_text)
+    # 带音频时先做识别，拿到真实转写后再交 LLM 评分。
+    # 旧实现把浏览器录音原样写成 `speech_{uid}.wav`（后缀 wav、内容实为 webm），
+    # Azure 必然解析失败，于是发音评估从未产出过任何结果。
+    pronunciation_detail = dict(req.pronunciation_detail or {})
+    transcript = req.transcript
+    if req.audio_base64:
+        import base64
 
-    # 如果有音频，尝试 Azure 发音评估
-    pronunciation_detail = {}
-    if req.audio_base64 and req.reference_text:
-        # 保存临时音频文件
-        import base64, tempfile, os
-        audio_data = base64.b64decode(req.audio_base64)
-        temp_path = os.path.join(tempfile.gettempdir(), f"speech_{user.id}.wav")
-        with open(temp_path, "wb") as f:
-            f.write(audio_data)
-        pronunciation_detail = await assess_pronunciation(temp_path, req.reference_text)
+        payload = req.audio_base64.strip()
+        if payload.startswith("data:"):
+            payload = payload.split(",", 1)[-1]
+        try:
+            audio_bytes = base64.b64decode(payload, validate=False)
+        except Exception:
+            audio_bytes = b""
+
+        if audio_bytes:
+            tr = await transcribe_audio(
+                audio_bytes, mime=req.mime, reference_text=req.reference_text
+            )
+            if tr.get("transcript"):
+                transcript = tr["transcript"]
+            if tr.get("pronunciation_detail"):
+                pronunciation_detail = tr["pronunciation_detail"]
+
+    # LLM 评估
+    llm_result = await evaluate_speaking(transcript, req.topic, req.type, req.reference_text)
 
     # 保存记录
     # duration 此前一直未写入（口语记录时长恒为 0）——兰天童 10.10 反馈的时长统计据此一并修正
@@ -100,7 +157,7 @@ async def evaluate(req: SpeakingEvaluateRequest, db: Session = Depends(get_db), 
         type=req.type,
         topic=req.topic,
         duration=_dur,
-        transcript=req.transcript,
+        transcript=transcript,
         scores=json.dumps(llm_result.get("scores", []), ensure_ascii=False),
         overall_score=llm_result.get("overall_score", 0),
         feedback=llm_result.get("feedback", ""),
@@ -115,6 +172,7 @@ async def evaluate(req: SpeakingEvaluateRequest, db: Session = Depends(get_db), 
         overall_score=llm_result.get("overall_score", 0),
         feedback=llm_result.get("feedback", ""),
         reference_answer=llm_result.get("reference_answer", ""),
+        transcript=transcript,
         pronunciation_detail=pronunciation_detail,
         transcript_warning=llm_result.get("transcript_warning", ""),
     )

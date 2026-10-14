@@ -42,3 +42,15 @@ Thumbs.db
 *.tmp
 md2docx.*
 tsconfig.tsbuildinfo
+
+# ===== 安全：密钥与泄漏排查残留，一律不得进仓库（仓库为 public）=====
+# 10-09 DeepSeek key 泄露事件留下的 filter-repo 表达式与扫描产物，
+# 其中 .filter-repo-expressions.txt 含明文 key
+.filter-repo-expressions.txt
+objects.txt
+scan_leak.*
+*.env
+.env.*
+!.env.example
+*.pem
+*.key

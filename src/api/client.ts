@@ -139,8 +139,18 @@ export const listeningApi = {
 // ========== 口语模块 API ==========
 
 export const speakingApi = {
-  evaluate: (data: { type: string; topic: string; transcript?: string; audio_base64?: string; reference_text?: string; duration?: number }) =>
+  evaluate: (data: { type: string; topic: string; transcript?: string; audio_base64?: string; reference_text?: string; duration?: number; mime?: string; pronunciation_detail?: any }) =>
     request('/api/speaking/evaluate', { method: 'POST', body: JSON.stringify(data) }),
+
+  /** 浏览器录音 → 文本（+ 可选音素级发音评估）。识别在自有后端完成，不依赖浏览器厂商服务。 */
+  transcribe: (data: { audio_base64: string; mime?: string; reference_text?: string; language?: string }) =>
+    request<{
+      transcript: string
+      pronunciation_detail: any
+      source: string  // azure / unavailable / error
+      error: string
+      duration: number
+    }>('/api/speaking/transcribe', { method: 'POST', body: JSON.stringify(data) }),
 
   listRecords: () => request('/api/speaking/records'),
 

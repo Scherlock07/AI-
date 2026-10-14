@@ -10,6 +10,27 @@ class SpeakingEvaluateRequest(BaseModel):
     audio_base64: str = ""  # 可选：base64 编码音频
     reference_text: str = ""  # 用于发音对比的参考文本
     duration: int = 0  # 秒，练习时长（兰天童 10.10 反馈）
+    mime: str = ""  # audio_base64 对应的容器类型（audio/webm 等），供后端转码判断
+    # 前端在「录音 → 转写」一步已拿到的发音评估结果，回传后随记录一并落库。
+    # 否则发音评估只在响应里出现一次，学生刷新后（历史记录）就查不到了。
+    pronunciation_detail: dict = {}
+
+
+class SpeakingTranscribeRequest(BaseModel):
+    """浏览器录音 → 文本。整条链路在自有后端完成，不依赖浏览器厂商的识别服务。"""
+
+    audio_base64: str
+    mime: str = ""  # audio/webm;codecs=opus、audio/mp4 等
+    reference_text: str = ""  # 有值时同时做音素级发音评估
+    language: str = "en-US"
+
+
+class SpeakingTranscribeResult(BaseModel):
+    transcript: str = ""
+    pronunciation_detail: dict = {}
+    source: str = "azure"  # azure / unavailable / error
+    error: str = ""
+    duration: float = 0.0  # 音频秒数
 
 
 class SpeakingScoreDimension(BaseModel):
@@ -24,6 +45,7 @@ class SpeakingEvaluateResult(BaseModel):
     overall_score: int
     feedback: str
     reference_answer: str = ""
+    transcript: str = ""  # 后端识别出的真实转写，回传给前端展示
     pronunciation_detail: dict = {}  # Azure 发音评估详情
     transcript_warning: str = ""  # empty / too_short：转写为空或过短时的显式提示
 
