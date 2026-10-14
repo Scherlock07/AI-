@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/Button'
 import { Progress } from '@/components/ui/Progress'
 import { Skeleton, ErrorState, EmptyState, LoadingSpinner } from '@/components/ui/Loading'
 import { cn, formatDuration, getScoreColor } from '@/lib/utils'
+import { formatClock, humanDuration, formatDateTime } from '@/lib/usePracticeTimer'
 import {
   Mic, Play, Pause, Square, Users, Bot,
   Presentation, MessagesSquare, Repeat, GraduationCap, BookOpen,
@@ -17,6 +18,7 @@ import {
   AlertCircle, Wifi, Send, Plus, Search, ArrowLeft,
   UserPlus, LogOut, Hash, Globe, Zap, Lightbulb, X,
   Loader2, MessageCircle, Crown,
+  Timer, History, Trash2, Download, ChevronDown, ChevronRight,
 } from 'lucide-react'
 
 type TabType = 'classroom' | 'presentation' | 'discussion' | 'conversation' | 'retelling' | 'history'
@@ -1835,15 +1837,62 @@ function ConversationView() {
   const [result, setResult] = useState<any>(null)
   const [aiReplying, setAiReplying] = useState(false)
   const [customTopic, setCustomTopic] = useState('')
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
+  const [finalDuration, setFinalDuration] = useState(0)
+  const sessionIdRef = useRef<string>('')
+  const startAtRef = useRef<number>(0)
+  const tickRef = useRef<any>(null)
 
   const suggestedTopics = mode === 'daily'
     ? ['环境保护', '科技发展', '教育改革', '社会公平', '旅行经历', '健康生活']
     : ['AI伦理', '全球化利弊', '隐私vs安全', '传统文化保护', '财富分配', '气候政策']
 
+  // ===== 计时器（兰天童 10.10 反馈：统计对话练习时长）=====
+  // 从「开始对话」起计时，「结束对话并评分」时停止并上报
+  useEffect(() => {
+    if (active) {
+      startAtRef.current = Date.now()
+      setElapsed(0)
+      tickRef.current = setInterval(() => {
+        if (startAtRef.current) setElapsed(Math.floor((Date.now() - startAtRef.current) / 1000))
+      }, 1000)
+    } else if (tickRef.current) {
+      clearInterval(tickRef.current)
+      tickRef.current = null
+    }
+    return () => {
+      if (tickRef.current) clearInterval(tickRef.current)
+    }
+  }, [active])
+
+  // 离开页面（切走/关闭）时兜底上报未结束的会话
+  useEffect(() => {
+    return () => {
+      if (sessionIdRef.current && startAtRef.current) {
+        const dur = Math.floor((Date.now() - startAtRef.current) / 1000)
+        if (dur > 0) {
+          speakingApi
+            .finishConversation(sessionIdRef.current, { duration: dur })
+            .catch(() => { /* 静默 */ })
+        }
+      }
+    }
+  }, [])
+
+  /** 把一条消息落库；失败静默，不影响对话体验 */
+  const persistMessage = (role: 'user' | 'ai', content: string) => {
+    if (!sessionIdRef.current) return
+    speakingApi
+      .addConversationMessage(sessionIdRef.current, role, content)
+      .catch(() => { /* 静默 */ })
+  }
+
   const startConversation = (topic: string) => {
     setActive(true)
     setResult(null)
     setMessages([])
+    setFinalDuration(0)
     const modeLabel = mode === 'daily' ? 'casual daily conversation' : 'critical thinking discussion'
     const systemText = topic
       ? `Let's have a ${modeLabel} about: ${topic}. I'll start by asking you a question related to this topic.`
@@ -1851,17 +1900,29 @@ function ConversationView() {
         ? "Hi there! How was your day? Did anything interesting happen?"
         : "What's your stance on the ethical implications of artificial intelligence in decision-making processes?")
 
+    // 创建服务端会话（持久化的前提）；失败则仍可对话，只是不落库
+    speakingApi
+      .startConversation(mode, topic || '')
+      .then((res: any) => {
+        if (res && res.id) {
+          sessionIdRef.current = res.id
+        }
+      })
+      .catch(() => { sessionIdRef.current = '' })
+
     // 让AI发起对话
     setAiReplying(true)
     profileApi.askAssistant(
       `You are an English conversation partner on a language learning platform. The student wants to practice ${modeLabel}${topic ? ` about "${topic}"` : ''}. Please start the conversation with a natural opening question or comment in English. Keep it short (1-2 sentences).`,
       'conversation-start'
     ).then((res: any) => {
+      const text = res.reply || systemText
       setMessages([{
         role: 'ai',
-        text: res.reply || systemText,
+        text,
         time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
       }])
+      persistMessage('ai', text)
     }).catch(() => {
       setMessages([{
         role: 'ai',
@@ -1876,11 +1937,14 @@ function ConversationView() {
   const sendMessage = async (presetText?: string) => {
     const textToSend = presetText ?? input
     if (!textToSend.trim() || aiReplying) return
-    const userMsg = { role: 'user', text: textToSend, time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }) }
+    const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+    const userMsg = { role: 'user', text: textToSend, time: now }
     const currentInput = textToSend
     if (!presetText) setInput('')
     setMessages(prev => [...prev, userMsg])
     setAiReplying(true)
+    // 学生消息立即落库
+    persistMessage('user', currentInput)
 
     try {
       // 构建对话上下文（只保留最近10条，防止无限累积导致单次请求过大）
@@ -1907,11 +1971,13 @@ Rules (VERY IMPORTANT):
 5. Respond in English, 2-3 sentences, natural conversational tone matching the student's level.`
 
       const res = await profileApi.askAssistant(prompt, 'conversation-continue')
+      const aiText = res.reply || "That's an interesting point — could you say a bit more about how you came to that view?"
       setMessages(prev => [...prev, {
         role: 'ai',
-        text: res.reply || "That's an interesting point — could you say a bit more about how you came to that view?",
+        text: aiText,
         time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
       }])
+      persistMessage('ai', aiText)
     } catch (err: any) {
       // 失败绝不伪装成 AI 回复（旧版这里会输出写死的"Could you elaborate"，导致复读机效果）
       const errMsg = err?.message || 'AI 回复失败，请稍后重试'
@@ -1938,6 +2004,14 @@ Rules (VERY IMPORTANT):
   }
 
   const finishConversation = async () => {
+    // 先停表，锁定本次时长
+    const dur = startAtRef.current
+      ? Math.floor((Date.now() - startAtRef.current) / 1000)
+      : 0
+    setFinalDuration(dur)
+    if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null }
+    startAtRef.current = 0
+
     setEvaluating(true)
     setActive(false)
     try {
@@ -1945,20 +2019,53 @@ Rules (VERY IMPORTANT):
         type: 'conversation',
         topic: mode === 'daily' ? '日常对话' : '思辨对话',
         transcript: messages.map(m => `${m.role}: ${m.text}`).join('\n'),
+        duration: dur,
       })
       setResult(res)
+      // 会话收尾：写入时长与评分（兰天童 10.10 反馈的两项要求一并落地）
+      if (sessionIdRef.current) {
+        speakingApi.finishConversation(sessionIdRef.current, {
+          duration: dur,
+          overall_score: res?.overall_score || 0,
+          feedback: res?.feedback || res?.ai_feedback || '',
+          scores: res?.scores || [],
+        }).catch(() => { /* 静默 */ })
+      }
+      // 另记一条统一练习时长，便于学习档案页汇总
+      profileApi.practiceEnd({ module: 'conversation', sub_type: mode, duration: dur }).catch(() => { /* 静默 */ })
     } catch {
       setResult({
         scores: [{ name: '整体表现', score: 78 }],
         feedback: '对话完成。继续练习以提升口语流利度和表达准确性。',
       })
+      if (sessionIdRef.current) {
+        speakingApi.finishConversation(sessionIdRef.current, { duration: dur }).catch(() => { /* 静默 */ })
+      }
+      profileApi.practiceEnd({ module: 'conversation', sub_type: mode, duration: dur }).catch(() => { /* 静默 */ })
     } finally {
       setEvaluating(false)
     }
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div className="space-y-4">
+      {/* 顶部：历史记录入口 */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm text-gray-500">
+          <Clock className="w-4 h-4" />
+          <span>对话会自动保存文字记录，并统计练习时长</span>
+        </div>
+        <Button size="sm" variant="outline" onClick={() => setHistoryOpen(true)}>
+          <History className="w-4 h-4" />
+          历史对话
+        </Button>
+      </div>
+
+      {historyOpen && (
+        <ConversationHistoryPanel onClose={() => setHistoryOpen(false)} />
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <div className="space-y-4">
         <Card>
           <CardHeader>
@@ -2027,6 +2134,10 @@ Rules (VERY IMPORTANT):
                 <div className="p-3 bg-indigo-50 rounded-lg flex items-center gap-2">
                   <div className={cn('w-3 h-3 rounded-full', aiReplying ? 'bg-amber-500 animate-pulse' : 'bg-green-500 animate-pulse')}></div>
                   <span className="text-sm text-indigo-600">{aiReplying ? 'AI正在思考...' : 'AI正在聆听...'}</span>
+                  <span className="ml-auto flex items-center gap-1 text-sm font-mono font-semibold text-indigo-700">
+                    <Timer className="w-4 h-4" />
+                    {formatClock(elapsed)}
+                  </span>
                 </div>
                 <div className="flex items-center gap-2">
                   <input
@@ -2056,9 +2167,18 @@ Rules (VERY IMPORTANT):
             )}
 
             {result && !active && !evaluating && (
-              <Button variant="outline" className="w-full" onClick={() => { setResult(null); setMessages([]); setCustomTopic(''); }}>
-                开始新对话
-              </Button>
+              <div className="space-y-2">
+                {finalDuration > 0 && (
+                  <div className="p-3 bg-emerald-50 border border-emerald-100 rounded-lg flex items-center gap-2 text-sm text-emerald-700">
+                    <Timer className="w-4 h-4" />
+                    本次对话用时 <span className="font-bold">{humanDuration(finalDuration)}</span>
+                    <span className="text-emerald-600/70 ml-auto">已记录到学习档案</span>
+                  </div>
+                )}
+                <Button variant="outline" className="w-full" onClick={() => { setResult(null); setMessages([]); setCustomTopic(''); setFinalDuration(0); }}>
+                  开始新对话
+                </Button>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -2138,7 +2258,175 @@ Rules (VERY IMPORTANT):
           </Card>
         )}
       </div>
+      </div>
     </div>
+  )
+}
+
+
+// ===== 人机对话历史记录（兰天童 10.10 反馈：保存并生成文字记录）=====
+function ConversationHistoryPanel({ onClose }: { onClose: () => void }) {
+  const { toast } = useToast()
+  const [loading, setLoading] = useState(true)
+  const [sessions, setSessions] = useState<any[]>([])
+  const [expanded, setExpanded] = useState<string>('')
+  const [detail, setDetail] = useState<Record<string, any>>({})
+  const [loadingDetail, setLoadingDetail] = useState<string>('')
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const res: any = await speakingApi.listConversations(false, 50)
+      setSessions(Array.isArray(res) ? res : [])
+    } catch (err: any) {
+      toast(err?.message || '加载历史对话失败', 'error')
+      setSessions([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const toggle = async (id: string) => {
+    if (expanded === id) { setExpanded(''); return }
+    setExpanded(id)
+    if (detail[id]) return
+    setLoadingDetail(id)
+    try {
+      const res: any = await speakingApi.getConversation(id)
+      setDetail(prev => ({ ...prev, [id]: res }))
+    } catch {
+      toast('加载对话详情失败', 'error')
+    } finally {
+      setLoadingDetail('')
+    }
+  }
+
+  const remove = async (id: string) => {
+    if (!window.confirm('确定删除这条对话记录？删除后无法恢复，其他记录不受影响。')) return
+    try {
+      await speakingApi.deleteConversation(id)
+      setSessions(prev => prev.filter(s => s.id !== id))
+      if (expanded === id) setExpanded('')
+      toast('已删除', 'success')
+    } catch (err: any) {
+      toast(err?.message || '删除失败', 'error')
+    }
+  }
+
+  /** 导出某次对话为 Word（复用零依赖方案：HTML + Word 命名空间） */
+  const exportWord = (s: any, msgs: any[]) => {
+    const esc = (t: string) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br/>')
+    const rows = msgs.map(m =>
+      `<p style="margin:6px 0"><b style="color:${m.role === 'ai' ? '#7c3aed' : '#4f46e5'}">${m.role === 'ai' ? 'AI' : '我'}：</b>${esc(m.content)}</p>`
+    ).join('')
+    const html = `<!DOCTYPE html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>对话记录</title></head><body style="font-family:'Microsoft YaHei',sans-serif;font-size:11pt;line-height:1.6">
+<h1 style="font-size:16pt;text-align:center">人机对话记录</h1>
+<p style="color:#666;font-size:10pt">对话类型：${s.mode === 'daily' ? '日常对话' : '思辨对话'}　主题：${esc(s.topic || '自由对话')}　用时：${humanDuration(s.duration || 0)}　消息数：${s.message_count || 0}</p>
+<p style="color:#666;font-size:10pt">开始时间：${(s.started_at || '').replace('T', ' ').slice(0, 19)}</p>
+<hr/>${rows}
+${s.feedback ? `<hr/><p style="font-size:10pt;color:#333"><b>AI 点评：</b>${esc(s.feedback)}</p>` : ''}
+</body></html>`
+    const blob = new Blob(['\ufeff', html], { type: 'application/msword;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `对话记录_${s.mode === 'daily' ? '日常' : '思辨'}_${(s.started_at || '').slice(0, 10)}.doc`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 2000)
+  }
+
+  return (
+    <Card className="border-indigo-100">
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <History className="w-5 h-5 text-indigo-500" />
+          <CardTitle>历史对话记录</CardTitle>
+          <span className="text-xs text-gray-400">共 {sessions.length} 次</span>
+          <button onClick={onClose} className="ml-auto text-sm text-gray-400 hover:text-gray-600">收起</button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <div className="flex justify-center py-6"><LoadingSpinner /></div>
+        ) : sessions.length === 0 ? (
+          <p className="text-sm text-gray-400 py-4 text-center">
+            暂无历史对话。完成一次对话后，文字记录会自动保存在这里。
+          </p>
+        ) : (
+          <div className="space-y-2 max-h-[520px] overflow-y-auto">
+            {sessions.map(s => {
+              const isOpen = expanded === s.id
+              const msgs = detail[s.id]?.messages || []
+              return (
+                <div key={s.id} className="border border-gray-100 rounded-lg overflow-hidden">
+                  <div className="flex items-center gap-3 px-3 py-2.5 bg-gray-50/60">
+                    <button onClick={() => toggle(s.id)} className="flex items-center gap-2 flex-1 text-left">
+                      {isOpen ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+                      <Badge variant={s.mode === 'daily' ? 'primary' : 'warning'} className="shrink-0">
+                        {s.mode === 'daily' ? '日常' : '思辨'}
+                      </Badge>
+                      <span className="text-sm font-medium text-gray-700 truncate">{s.topic || '自由对话'}</span>
+                    </button>
+                    <span className="text-xs text-gray-400 shrink-0">{s.message_count} 条</span>
+                    <span className="text-xs text-gray-500 shrink-0 flex items-center gap-1">
+                      <Timer className="w-3.5 h-3.5" />{humanDuration(s.duration || 0)}
+                    </span>
+                    {s.overall_score > 0 && (
+                      <span className="text-xs font-bold text-indigo-600 shrink-0">{s.overall_score} 分</span>
+                    )}
+                    <span className="text-xs text-gray-300 shrink-0">{formatDateTime(s.started_at)}</span>
+                    <button onClick={() => remove(s.id)} className="text-gray-300 hover:text-red-500 shrink-0" title="删除">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {isOpen && (
+                    <div className="p-3 space-y-2 bg-white">
+                      {loadingDetail === s.id ? (
+                        <div className="flex justify-center py-4"><LoadingSpinner /></div>
+                      ) : msgs.length === 0 ? (
+                        <p className="text-xs text-gray-400">该次对话没有留下文字记录。</p>
+                      ) : (
+                        <>
+                          <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                            {msgs.map((m: any) => (
+                              <div key={m.id} className={cn('flex gap-2', m.role === 'user' && 'flex-row-reverse')}>
+                                <div className={cn('w-6 h-6 rounded-full flex items-center justify-center shrink-0 text-[10px] font-medium',
+                                  m.role === 'ai' ? 'bg-purple-100 text-purple-600' : 'bg-indigo-100 text-indigo-600')}>
+                                  {m.role === 'ai' ? 'AI' : '我'}
+                                </div>
+                                <div className={cn('max-w-[80%] px-2.5 py-1.5 rounded-lg text-xs leading-relaxed',
+                                  m.role === 'user' ? 'bg-indigo-500 text-white' : 'bg-gray-50 text-gray-700')}>
+                                  {m.content}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                          {s.feedback && (
+                            <div className="mt-2 p-2.5 bg-amber-50 border border-amber-100 rounded-lg">
+                              <p className="text-xs font-medium text-amber-700 mb-1">AI 点评</p>
+                              <p className="text-xs text-amber-800/90 leading-relaxed whitespace-pre-wrap">{s.feedback}</p>
+                            </div>
+                          )}
+                          <Button size="sm" variant="outline" className="w-full" onClick={() => exportWord(s, msgs)}>
+                            <Download className="w-3.5 h-3.5" />
+                            导出文字记录（Word）
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 

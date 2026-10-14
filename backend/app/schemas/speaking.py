@@ -9,6 +9,7 @@ class SpeakingEvaluateRequest(BaseModel):
     transcript: str = ""
     audio_base64: str = ""  # 可选：base64 编码音频
     reference_text: str = ""  # 用于发音对比的参考文本
+    duration: int = 0  # 秒，练习时长（兰天童 10.10 反馈）
 
 
 class SpeakingScoreDimension(BaseModel):
@@ -59,6 +60,73 @@ class DiscussionRoomResponse(BaseModel):
 
 class DiscussionMessageCreate(BaseModel):
     content: str
+
+
+# ============ 人机对话会话持久化（兰天童 10.10 反馈）============
+
+class ConversationStartRequest(BaseModel):
+    mode: str = "daily"  # daily / critical
+    topic: str = ""
+
+
+class ConversationMessageAdd(BaseModel):
+    role: str = "user"  # user / ai
+    content: str
+
+
+class ConversationMessageResponse(BaseModel):
+    id: str
+    session_id: str
+    role: str = "user"
+    content: str = ""
+    turn_index: int = 0
+    created_at: str = ""
+
+
+class ConversationSessionResponse(BaseModel):
+    id: str
+    mode: str = "daily"
+    topic: str = ""
+    status: str = "active"
+    message_count: int = 0
+    duration: int = 0
+    overall_score: int = 0
+    feedback: str = ""
+    started_at: str = ""
+    completed_at: str = ""
+    messages: list[ConversationMessageResponse] = []
+
+
+class ConversationFinishRequest(BaseModel):
+    duration: int = 0  # 秒，前端计时器上报
+    overall_score: int = 0
+    feedback: str = ""
+    scores: list[dict] = []
+
+
+class PracticeStartRequest(BaseModel):
+    module: str
+    sub_type: str = ""
+
+
+class PracticeStartResponse(BaseModel):
+    session_id: str
+    started_at: str
+
+
+class PracticeEndRequest(BaseModel):
+    session_id: str = ""
+    duration: int = 0        # 秒，前端上报
+    module: str = ""
+    sub_type: str = ""
+
+
+class PracticeEndResponse(BaseModel):
+    ok: bool = True
+    duration: int = 0
+    module: str = ""
+    total_duration: int = 0  # 该模块累计时长（秒）
+    total_count: int = 0     # 该模块累计次数
 
 
 class DiscussionMessageResponse(BaseModel):

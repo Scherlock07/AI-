@@ -11,9 +11,12 @@ from app.config import settings
 from app.database import engine, Base
 
 # 导入所有模型以注册到 Base.metadata
-from app.models.user import User
+from app.models.user import User, PracticeSession
 from app.models.listening import ListeningMaterial, ListeningExercise
-from app.models.speaking import SpeakingRecord, DiscussionRoom, DiscussionMessage
+from app.models.speaking import (
+    SpeakingRecord, DiscussionRoom, DiscussionMessage,
+    ConversationSession, ConversationMessage,
+)
 from app.models.reading import ReadingText, ReadingExercise
 from app.models.writing import WritingSubmission, WritingPeerReview
 from app.models.vocabulary import VocabularyWord, GrammarExercise, GrammarExerciseRecord, WrongAnswer

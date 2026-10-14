@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button'
 import { Progress } from '@/components/ui/Progress'
 import { Skeleton, ErrorState, EmptyState, LoadingSpinner } from '@/components/ui/Loading'
 import { cn, formatDuration, getDifficultyLabel, getDifficultyColor } from '@/lib/utils'
+import { usePracticeTimer } from '@/lib/usePracticeTimer'
 import { speak, stop, accentToLang, speakDialogue, stripSpeakerLabels } from '@/lib/tts'
 import {
   Headphones, Upload, Play, Pause, Volume2,
@@ -17,6 +18,8 @@ import {
 type TabType = 'library' | 'generate' | 'practice' | 'vocab'
 
 export function ListeningModule() {
+  // 练习时长埋点：进入本模块即开始计时，离开时自动上报（兰天童 10.10 反馈）
+  usePracticeTimer('listening')
   const [tab, setTab] = useState<TabType>('library')
 
   return (

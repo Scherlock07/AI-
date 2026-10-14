@@ -9,10 +9,11 @@ import { Button } from '@/components/ui/Button'
 import { Progress } from '@/components/ui/Progress'
 import { Skeleton, ErrorState, EmptyState, LoadingSpinner } from '@/components/ui/Loading'
 import { cn, getScoreColor, formatDate } from '@/lib/utils'
+import { humanDuration } from '@/lib/usePracticeTimer'
 import {
   Target, TrendingUp, Calendar, Award, Flame,
   BookOpen, Mic, Headphones, PenLine, Sparkles, Brain,
-  Clock, Send,
+  Clock, Send, Timer,
 } from 'lucide-react'
 import {
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
@@ -27,6 +28,7 @@ export function LearningProfile() {
   const [activities, setActivities] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [practiceStats, setPracticeStats] = useState<any>(null)
 
   // AI Assistant
   const [aiInput, setAiInput] = useState('')
@@ -37,12 +39,14 @@ export function LearningProfile() {
     setLoading(true)
     setError(null)
     try {
-      const [statsRes, pathRes, activitiesRes] = await Promise.all([
+      const [statsRes, pathRes, activitiesRes, practiceRes] = await Promise.all([
         profileApi.getStats().catch(() => null),
         profileApi.getLearningPath().catch(() => null),
         profileApi.getRecentActivities().catch(() => null),
+        profileApi.practiceStats(30).catch(() => null),
       ])
       setStats(statsRes)
+      setPracticeStats(practiceRes)
       const pathData = Array.isArray(pathRes) ? pathRes : (pathRes?.learning_path || pathRes?.items || [])
       setLearningPath(pathData)
       const actData = Array.isArray(activitiesRes) ? activitiesRes : (activitiesRes?.activities || activitiesRes?.items || [])
@@ -264,6 +268,98 @@ export function LearningProfile() {
                   )
                 })}
               </div>
+            </CardContent>
+          </Card>
+
+          {/* 练习时长统计（兰天童 10.10 反馈） */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Timer className="w-5 h-5 text-emerald-500" />
+                <CardTitle>练习时长统计</CardTitle>
+                <span className="text-xs text-gray-400 ml-auto">近 30 天</span>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {!practiceStats || (practiceStats.total_count || 0) === 0 ? (
+                <p className="text-sm text-gray-400 py-4 text-center">
+                  还没有练习时长数据。<br />
+                  <span className="text-xs">进入任一练习模块开始学习后，时长会自动记录在这里。</span>
+                </p>
+              ) : (
+                <>
+                  <div className="grid grid-cols-3 gap-3 mb-4">
+                    <div className="p-3 bg-emerald-50 rounded-xl text-center">
+                      <div className="text-2xl font-bold text-emerald-700">
+                        {practiceStats.total_hours >= 1
+                          ? practiceStats.total_hours
+                          : practiceStats.total_minutes}
+                      </div>
+                      <div className="text-xs text-emerald-600/80 mt-0.5">
+                        总时长（{practiceStats.total_hours >= 1 ? '小时' : '分钟'}）
+                      </div>
+                    </div>
+                    <div className="p-3 bg-indigo-50 rounded-xl text-center">
+                      <div className="text-2xl font-bold text-indigo-700">{practiceStats.total_count}</div>
+                      <div className="text-xs text-indigo-600/80 mt-0.5">练习次数</div>
+                    </div>
+                    <div className="p-3 bg-purple-50 rounded-xl text-center">
+                      <div className="text-2xl font-bold text-purple-700">
+                        {practiceStats.total_count
+                          ? Math.round(practiceStats.total_seconds / practiceStats.total_count / 60)
+                          : 0}
+                      </div>
+                      <div className="text-xs text-purple-600/80 mt-0.5">平均时长（分钟）</div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    {(practiceStats.by_module || []).map((m: any) => {
+                      const pct = practiceStats.total_seconds
+                        ? Math.round((m.total_seconds / practiceStats.total_seconds) * 100)
+                        : 0
+                      return (
+                        <div key={m.module}>
+                          <div className="flex items-center justify-between text-sm mb-1">
+                            <span className="text-gray-700">{m.label}</span>
+                            <span className="text-gray-400 text-xs">
+                              {humanDuration(m.total_seconds)} · {m.count} 次
+                            </span>
+                          </div>
+                          <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                            <div className="h-full bg-gradient-to-r from-emerald-400 to-emerald-500 rounded-full"
+                                 style={{ width: `${Math.max(pct, 2)}%` }} />
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  {Array.isArray(practiceStats.trend) && practiceStats.trend.length > 0 && (
+                    <div className="mt-4 pt-4 border-t border-gray-100">
+                      <p className="text-xs text-gray-400 mb-2">近 7 天时长趋势（分钟）</p>
+                      <div className="flex items-end gap-1.5 h-16">
+                        {practiceStats.trend.map((t: any) => {
+                          const mins = Math.round((t.seconds || 0) / 60)
+                          const maxMin = Math.max(
+                            ...practiceStats.trend.map((x: any) => Math.round((x.seconds || 0) / 60)),
+                            1
+                          )
+                          const h = Math.max((mins / maxMin) * 100, 4)
+                          return (
+                            <div key={t.date} className="flex-1 flex flex-col items-center gap-1" title={`${t.date}：${mins} 分钟`}>
+                              <span className="text-[10px] text-gray-400">{mins || ''}</span>
+                              <div className="w-full bg-indigo-400 rounded-t transition-all"
+                                   style={{ height: `${h}%` }} />
+                              <span className="text-[9px] text-gray-300">{t.date.slice(5)}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
             </CardContent>
           </Card>
 

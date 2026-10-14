@@ -139,7 +139,7 @@ export const listeningApi = {
 // ========== 口语模块 API ==========
 
 export const speakingApi = {
-  evaluate: (data: { type: string; topic: string; transcript?: string; audio_base64?: string; reference_text?: string }) =>
+  evaluate: (data: { type: string; topic: string; transcript?: string; audio_base64?: string; reference_text?: string; duration?: number }) =>
     request('/api/speaking/evaluate', { method: 'POST', body: JSON.stringify(data) }),
 
   listRecords: () => request('/api/speaking/records'),
@@ -221,6 +221,37 @@ export const speakingApi = {
   // 轮流发言
   nextSpeaker: (roomId: string) =>
     request(`/api/speaking/rooms/${roomId}/next-speaker`, { method: 'POST' }),
+
+  // ===== 人机对话会话持久化（兰天童 10.10 反馈）=====
+  startConversation: (mode: string, topic: string) =>
+    request('/api/speaking/conversation/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ mode, topic }),
+    }),
+
+  addConversationMessage: (sessionId: string, role: string, content: string) =>
+    request(`/api/speaking/conversation/sessions/${sessionId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ role, content }),
+    }),
+
+  finishConversation: (
+    sessionId: string,
+    data: { duration: number; overall_score?: number; feedback?: string; scores?: any[] }
+  ) =>
+    request(`/api/speaking/conversation/sessions/${sessionId}/finish`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  listConversations: (withMessages = false, limit = 30) =>
+    request(`/api/speaking/conversation/sessions?with_messages=${withMessages}&limit=${limit}`),
+
+  getConversation: (sessionId: string) =>
+    request(`/api/speaking/conversation/sessions/${sessionId}`),
+
+  deleteConversation: (sessionId: string) =>
+    request(`/api/speaking/conversation/sessions/${sessionId}`, { method: 'DELETE' }),
 }
 
 // ========== 阅读模块 API ==========
@@ -419,6 +450,25 @@ export const profileApi = {
   // AI 助教
   askAssistant: (message: string, context: string = '') =>
     request(`/api/profile/ai-assistant?message=${encodeURIComponent(message)}&context=${encodeURIComponent(context)}`, { method: 'POST' }),
+
+  // ===== 练习时长统计（兰天童 10.10 反馈）=====
+  practiceStart: (module: string, sub_type = '') =>
+    request('/api/profile/practice/start', {
+      method: 'POST',
+      body: JSON.stringify({ module, sub_type }),
+    }),
+
+  practiceEnd: (data: { session_id?: string; module?: string; sub_type?: string; duration: number }) =>
+    request('/api/profile/practice/end', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  practiceStats: (days = 30) =>
+    request(`/api/profile/practice-stats?days=${days}`),
+
+  practiceSessions: (module = '', limit = 50) =>
+    request(`/api/profile/practice-sessions?module=${encodeURIComponent(module)}&limit=${limit}`),
 }
 
 // ========== 意见反馈 API ==========

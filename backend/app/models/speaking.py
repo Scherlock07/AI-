@@ -58,3 +58,39 @@ class DiscussionMessage(Base):
     sender_type = Column(String(10), default="user")  # user / ai / system
     content = Column(Text, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ConversationSession(Base):
+    """人机对话会话 — 一次「进入对话 → 结束评分」即一条记录
+
+    修复兰天童 10.10 反馈：此前人机对话消息只存在前端内存，
+    页面刷新或离开即丢失，无法回看；同时没有任何时长记录。
+    """
+    __tablename__ = "conversation_sessions"
+
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    mode = Column(String(20), default="daily")  # daily / critical
+    topic = Column(String(200), default="")
+    status = Column(String(20), default="active")  # active / completed
+    message_count = Column(Integer, default=0)
+    duration = Column(Integer, default=0)  # 秒，完成时写入
+    overall_score = Column(Integer, default=0)
+    feedback = Column(Text, default="")
+    scores = Column(Text, default="[]")  # JSON: [{name, score, feedback}]
+    started_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+
+class ConversationMessage(Base):
+    """人机对话消息 — 逐条持久化，会话结束后可完整回放"""
+    __tablename__ = "conversation_messages"
+
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    session_id = Column(String(36), ForeignKey("conversation_sessions.id"), nullable=False, index=True)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    # user 学生 / ai 对话伙伴
+    role = Column(String(10), default="user")
+    content = Column(Text, default="")
+    turn_index = Column(Integer, default=0)  # 会话内顺序，避免同秒时间戳排序错乱
+    created_at = Column(DateTime, default=datetime.utcnow)

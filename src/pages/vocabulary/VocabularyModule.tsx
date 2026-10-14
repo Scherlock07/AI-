@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button'
 import { Progress } from '@/components/ui/Progress'
 import { Skeleton, ErrorState, EmptyState, LoadingSpinner } from '@/components/ui/Loading'
 import { cn } from '@/lib/utils'
+import { usePracticeTimer } from '@/lib/usePracticeTimer'
 import { vocabularyApi } from '@/api/client'
 import { useToast } from '@/contexts/ToastContext'
 import {
@@ -16,6 +17,8 @@ import {
 type TabType = 'vocabulary' | 'grammar' | 'roots' | 'wrongbook'
 
 export function VocabularyModule() {
+  // 练习时长埋点：进入本模块即开始计时，离开时自动上报（兰天童 10.10 反馈）
+  usePracticeTimer('vocabulary')
   const [tab, setTab] = useState<TabType>('vocabulary')
   const [wrongCount, setWrongCount] = useState(0)
 
